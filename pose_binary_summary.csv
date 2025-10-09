@@ -1,0 +1,5 @@
+pose_label,test_samples,positive_samples,accuracy,precision_pose,recall_pose,f1_pose
+next_slide,80,20,1.0,1.0,1.0,1.0
+previous_slide,80,20,1.0,1.0,1.0,1.0
+zoom_in,80,20,1.0,1.0,1.0,1.0
+zoom_out,80,20,1.0,1.0,1.0,1.0
