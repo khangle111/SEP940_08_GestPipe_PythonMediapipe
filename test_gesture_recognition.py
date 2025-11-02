@@ -8,9 +8,11 @@ import mediapipe as mp
 import numpy as np
 
 # === CONFIG ===
-MODEL_PKL = 'motion_svm_model.pkl'
-SCALER_PKL = 'motion_scaler.pkl'
-STATIC_DYNAMIC_PKL = 'static_dynamic_classifier.pkl'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+MODEL_PKL = os.path.join(MODELS_DIR, 'motion_svm_model.pkl')
+SCALER_PKL = os.path.join(MODELS_DIR, 'motion_scaler.pkl')
+STATIC_DYNAMIC_PKL = os.path.join(MODELS_DIR, 'static_dynamic_classifier.pkl')
 BUFFER_SIZE = 60
 SMOOTHING_WINDOW = 3
 MIN_FRAMES = 12

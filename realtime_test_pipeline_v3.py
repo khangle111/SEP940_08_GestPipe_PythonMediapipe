@@ -10,9 +10,10 @@ from collections import deque
 
 # ==================== CONFIG ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODELS_DIR = os.path.join(BASE_DIR, "models")
 FINGER_RULE_CSV = "gesture_motion_finger_state.csv"     # rule-based definitions
-SCALER_PKL = "motion_scaler.pkl"                # from your training script
-MODEL_PKL = "motion_svm_model.pkl"              # from your training script
+SCALER_PKL = os.path.join(MODELS_DIR, "motion_scaler.pkl")                # from your training script
+MODEL_PKL = os.path.join(MODELS_DIR, "motion_svm_model.pkl")              # from your training script
 
 # Camera & buffer
 BUFFER_SIZE = 60
@@ -188,8 +189,8 @@ def main():
 
     rules = load_rule_csv(os.path.join(BASE_DIR, FINGER_RULE_CSV))
     scaler, model, model_meta = load_model_and_scaler(
-        os.path.join(BASE_DIR, SCALER_PKL),
-        os.path.join(BASE_DIR, MODEL_PKL),
+        SCALER_PKL,
+        MODEL_PKL,
     )
 
     label_encoder = model_meta.get("label_encoder") if isinstance(model_meta, dict) else None

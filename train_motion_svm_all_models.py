@@ -14,7 +14,8 @@ from sklearn.svm import SVC
 # === Config ===
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DATASET = os.path.join(BASE_DIR, "gesture_motion_dataset_realistic.csv")
-RESULTS_DIR = Path(BASE_DIR)
+RESULTS_DIR = Path(BASE_DIR) / "training_results"
+MODELS_DIR = Path(BASE_DIR) / "models"
 
 LEFT_COLS = [f"left_finger_state_{i}" for i in range(5)]
 RIGHT_COLS = [f"right_finger_state_{i}" for i in range(5)]
@@ -27,9 +28,12 @@ COARSE_C_VALUES = [1e-2, 1e-1, 1, 10, 100]  # Reduced from 7 to 5 values
 COARSE_GAMMA_VALUES = [1e-3, 1e-2, 1e-1, 1, "auto"]  # Reduced from 9 to 5 values
 FINE_MULTIPLIERS = [0.5, 1.0, 2.0]  # Reduced from 5 to 3 values
 
-MODEL_PKL = os.path.join(BASE_DIR, "motion_svm_model.pkl")
-SCALER_PKL = os.path.join(BASE_DIR, "motion_scaler.pkl")
-STATIC_DYNAMIC_PKL = os.path.join(BASE_DIR, "static_dynamic_classifier.pkl")
+RESULTS_DIR.mkdir(exist_ok=True)
+MODELS_DIR.mkdir(exist_ok=True)
+
+MODEL_PKL = str(MODELS_DIR / "motion_svm_model.pkl")
+SCALER_PKL = str(MODELS_DIR / "motion_scaler.pkl")
+STATIC_DYNAMIC_PKL = str(MODELS_DIR / "static_dynamic_classifier.pkl")
 
 
 TEST_FRACTION = 0.25

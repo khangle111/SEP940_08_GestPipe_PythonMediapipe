@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 BASE_DIR = Path(__file__).resolve().parent
+RESULTS_DIR = BASE_DIR / "training_results"
 OUTPUT_NAME = "grid_results_summary.csv"
 PATTERN = "grid_results_*.csv"
 
@@ -20,8 +21,9 @@ def extract_metadata(path: Path) -> tuple[str, str]:
 
 
 def main() -> None:
+    RESULTS_DIR.mkdir(exist_ok=True)
     csv_paths = sorted(
-        p for p in BASE_DIR.glob(PATTERN) if p.name != OUTPUT_NAME
+        p for p in RESULTS_DIR.glob(PATTERN) if p.name != OUTPUT_NAME
     )
     if not csv_paths:
         raise SystemExit("No grid_results CSV files found.")
@@ -70,7 +72,7 @@ def main() -> None:
 
     fieldnames = ["grid_resolution", "target_label"] + base_fieldnames
 
-    output_path = BASE_DIR / OUTPUT_NAME
+    output_path = RESULTS_DIR / OUTPUT_NAME
     with output_path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()

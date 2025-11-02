@@ -7,6 +7,10 @@ import pickle
 import pandas as pd
 import numpy as np
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+RESULTS_DIR = os.path.join(BASE_DIR, "training_results")
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+
 def load_and_analyze_results():
     """Tải và phân tích kết quả training"""
     
@@ -14,7 +18,7 @@ def load_and_analyze_results():
     print("=" * 60)
     
     # 1. Xem kết quả từ pose_binary_summary.csv
-    summary_file = "pose_binary_summary.csv"
+    summary_file = os.path.join(RESULTS_DIR, "pose_binary_summary.csv")
     if os.path.exists(summary_file):
         print("\n📊 KẾT QUẢ BINARY CLASSIFICATION (One-vs-Rest):")
         print("-" * 50)
@@ -34,7 +38,7 @@ def load_and_analyze_results():
             print(f"{pose:<15} {precision:<10} {recall:<10} {f1:<10} {samples:<8}")
     
     # 2. Tải model và kiểm tra multiclass accuracy
-    model_file = "motion_svm_model.pkl"
+    model_file = os.path.join(MODELS_DIR, "motion_svm_model.pkl")
     if os.path.exists(model_file):
         print(f"\n📈 MULTICLASS MODEL INFO:")
         print("-" * 30)
@@ -50,7 +54,7 @@ def load_and_analyze_results():
         print(f"✅ Danh sách gestures: {list(gestures)}")
         
     # 3. Kiểm tra dataset gốc để có context
-    dataset_file = "gesture_data_09_10_2025.csv"
+    dataset_file = os.path.join(BASE_DIR, "gesture_data_09_10_2025.csv")
     if os.path.exists(dataset_file):
         print(f"\n📋 DATASET INFO:")
         print("-" * 20)
@@ -65,7 +69,7 @@ def load_and_analyze_results():
             print(f"   {pose:<15}: {count:>4} samples")
     
     # 4. Xem kết quả grid search tốt nhất
-    grid_file = "grid_results_fine_multiclass.csv"
+    grid_file = os.path.join(RESULTS_DIR, "grid_results_fine_multiclass.csv")
     if os.path.exists(grid_file):
         print(f"\n🎯 BEST MULTICLASS PARAMETERS:")
         print("-" * 35)
