@@ -1,4 +1,5 @@
 import argparse
+import os
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -18,9 +19,11 @@ MOTION_SIMILARITY_THRESHOLD = 0.75
 STATIC_TEMPLATE_DELTA_THRESHOLD = 0.02
 STATIC_MOTION_MAX = 0.02
 STATIC_HOLD_SECONDS = 1.0
+INSTRUCTION_WINDOW = "Pose Instructions"
 
 FINGER_LEFT_COLS = [f"left_finger_state_{i}" for i in range(5)]
 FINGER_RIGHT_COLS = [f"right_finger_state_{i}" for i in range(5)]
+FINGER_NAMES = ["Thumb", "Index", "Middle", "Ring", "Pinky"]
 
 
 @dataclass
@@ -193,19 +196,156 @@ def is_static_pose(template: PoseTemplate) -> bool:
     return template.delta_mag <= STATIC_TEMPLATE_DELTA_THRESHOLD
 
 
-def ask_pose_selection(labels: Sequence[str]) -> int:
-    print("Available pose labels:")
-    for idx, label in enumerate(labels):
-        print(f"  [{idx}] {label}")
+def describe_right_hand(template: PoseTemplate) -> List[Tuple[str, Tuple[int, int, int], int]]:
+    lines: List[Tuple[str, Tuple[int, int, int], int]] = []
+    for name, state in zip(FINGER_NAMES, template.right):
+        status = "Open" if state else "Closed"
+        color = (80, 220, 80) if state else (70, 70, 255)  # BGR
+        lines.append((f"  - {name}: {status}", color, 2))
+    return lines
+
+
+def describe_motion(template: PoseTemplate) -> List[Tuple[str, Tuple[int, int, int], int]]:
+    if is_static_pose(template):
+        text = f"Static gesture: keep right hand steady for ≥ {STATIC_HOLD_SECONDS:.1f}s."
+        return [(text, (0, 215, 255), 2)]
+
+    dx, dy = float(template.delta[0]), float(template.delta[1])
+    if template.main_axis[0] == 1:
+        if dx > 0.0:
+            primary = "Primary motion: move from left to right."
+        elif dx < 0.0:
+            primary = "Primary motion: move from right to left."
+        else:
+            primary = "Primary motion: horizontal sweep."
+    else:
+        if dy > 0.0:
+            primary = "Primary motion: move downward."
+        elif dy < 0.0:
+            primary = "Primary motion: move upward."
+        else:
+            primary = "Primary motion: vertical sweep."
+
+    return [(primary, (0, 200, 255), 2)]
+
+
+def show_pose_instructions(pose_label: str, template: PoseTemplate) -> bool:
+    base_lines: List[Tuple[str, Tuple[int, int, int], int]] = [
+        (f"Pose: {pose_label}", (255, 255, 255), 2),
+        ("", (255, 255, 255), 1),
+        ("Left hand:", (255, 255, 255), 2),
+        ("  - Close left fist to start recording", (255, 255, 255), 1),
+        ("  - Release to finish attempt", (255, 255, 255), 1),
+        ("", (255, 255, 255), 1),
+        ("Right hand fingers:", (255, 255, 255), 2),
+    ]
+
+    base_lines.extend(describe_right_hand(template))
+    base_lines.append(("", (255, 255, 255), 1))
+    base_lines.extend(describe_motion(template))
+    base_lines.append(("", (255, 255, 255), 1))
+    base_lines.append(("Press Enter to begin, or Esc to cancel.", (200, 200, 200), 1))
+
+    width = 900
+    line_height = 36
+    top_margin = 60
+    height = top_margin + line_height * len(base_lines) + 40
+    canvas = np.zeros((height, width, 3), dtype=np.uint8)
+    canvas[:] = (30, 30, 30)
+
+    y = top_margin
+    for text, color, thickness in base_lines:
+        cv2.putText(
+            canvas,
+            text,
+            (40, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.75,
+            color,
+            thickness,
+            lineType=cv2.LINE_AA,
+        )
+        y += line_height
+
+    cv2.namedWindow(INSTRUCTION_WINDOW, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(INSTRUCTION_WINDOW, width, height)
+    cv2.imshow(INSTRUCTION_WINDOW, canvas)
+
     while True:
-        raw = input("Select pose index (Enter for 0): ").strip()
-        if not raw:
-            return 0
-        if raw.isdigit():
-            value = int(raw)
-            if 0 <= value < len(labels):
-                return value
-        print("Invalid selection, please try again.")
+        key = cv2.waitKey(0) & 0xFF
+        if key in (13, 10, 32):  # Enter or Space
+            cv2.destroyWindow(INSTRUCTION_WINDOW)
+            return True
+        if key in (27, ord("q"), ord("Q")):
+            cv2.destroyWindow(INSTRUCTION_WINDOW)
+            return False
+
+def ask_pose_selection(labels: Sequence[str]) -> int:
+    if not labels:
+        raise ValueError("No pose labels available for selection.")
+
+    def fallback() -> int:
+        print("Available pose labels:")
+        for idx, label in enumerate(labels):
+            print(f"  [{idx}] {label}")
+        while True:
+            raw = input("Select pose index (Enter for 0): ").strip()
+            if not raw:
+                return 0
+            if raw.isdigit():
+                value = int(raw)
+                if 0 <= value < len(labels):
+                    return value
+            print("Invalid selection, please try again.")
+
+    try:
+        import msvcrt
+    except ImportError:
+        return fallback()
+
+    current = 0
+
+    def render() -> None:
+        os.system("cls")
+        print("=== Pose Selection ===")
+        print("Use ↑/↓ arrows or W/S to navigate. Press Enter to confirm.")
+        print("Press Q to keep current choice and continue.\n")
+        for idx, label in enumerate(labels):
+            prefix = "▶" if idx == current else " "
+            print(f"{prefix} {label}")
+
+    render()
+    while True:
+        key = msvcrt.getwch()
+        if key in ("\r", "\n"):
+            os.system("cls")
+            print(f"Selected pose: {labels[current]}")
+            time.sleep(0.3)
+            return current
+        if key in ("q", "Q"):
+            os.system("cls")
+            print(f"Selected pose: {labels[current]}")
+            time.sleep(0.3)
+            return current
+        if key in ("w", "W"):
+            current = (current - 1) % len(labels)
+            render()
+            continue
+        if key in ("s", "S"):
+            current = (current + 1) % len(labels)
+            render()
+            continue
+        if key in ("\x03",):  # Ctrl+C
+            raise KeyboardInterrupt
+        if key in ("\xe0", "\x00"):
+            second = msvcrt.getwch()
+            if second == "H":  # Up arrow
+                current = (current - 1) % len(labels)
+                render()
+            elif second == "P":  # Down arrow
+                current = (current + 1) % len(labels)
+                render()
+
 
 
 def evaluate_attempt(
@@ -256,6 +396,10 @@ def run_session(
         raise ValueError("No pose templates loaded.")
     pose_labels = sorted(template_by_pose.keys())
     current_idx = ask_pose_selection(pose_labels)
+    current_pose = pose_labels[current_idx]
+    if not show_pose_instructions(current_pose, template_by_pose[current_pose]):
+        print("Training cancelled before start.")
+        return
 
     stats = AttemptStats()
     mp_hands = mp.solutions.hands
@@ -440,6 +584,10 @@ def run_session(
                 recording_start_ts = None
                 motion_buffer.clear()
                 update_status("")
+                next_pose = pose_labels[current_idx]
+                if not show_pose_instructions(next_pose, template_by_pose[next_pose]):
+                    break
+                continue
             elif key == ord("p"):
                 current_idx = (current_idx - 1) % len(pose_labels)
                 stats.reset()
@@ -448,6 +596,10 @@ def run_session(
                 recording_start_ts = None
                 motion_buffer.clear()
                 update_status("")
+                prev_pose = pose_labels[current_idx]
+                if not show_pose_instructions(prev_pose, template_by_pose[prev_pose]):
+                    break
+                continue
             elif key == ord("r"):
                 stats.reset()
                 recording_start_ts = None

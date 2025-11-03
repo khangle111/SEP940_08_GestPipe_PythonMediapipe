@@ -24,9 +24,9 @@ MOTION_COLS = ["main_axis_x", "main_axis_y", "delta_x", "delta_y"]
 DELTA_WEIGHT = 15.0  # Increased from 5.0 to emphasize motion direction
 MIN_DELTA_MAG = 0.001  # Lowered to preserve static gesture data (was 0.05)
 
-COARSE_C_VALUES = [1e-2, 1e-1, 1, 10, 100]  # Reduced from 7 to 5 values
-COARSE_GAMMA_VALUES = [1e-3, 1e-2, 1e-1, 1, "auto"]  # Reduced from 9 to 5 values
-FINE_MULTIPLIERS = [0.5, 1.0, 2.0]  # Reduced from 5 to 3 values
+COARSE_C_VALUES = [0.1, 1, 10]  # Further reduced to prevent system overload  
+COARSE_GAMMA_VALUES = [0.01, 0.1, "auto"]  # Further reduced to prevent system overload
+FINE_MULTIPLIERS = [1.0, 2.0]  # Further reduced to prevent system overload
 
 RESULTS_DIR.mkdir(exist_ok=True)
 MODELS_DIR.mkdir(exist_ok=True)
@@ -223,7 +223,7 @@ def run_adaptive_grid_search(pose, estimator, X, y, groups, output_name, static_
         param_grid,
         cv=cv,
         scoring="f1",  # F1 better for imbalanced data
-        n_jobs=-1,
+        n_jobs=2,  # Limit to 2 cores to prevent system freeze
         verbose=1  # Show progress
     )
     
@@ -267,7 +267,7 @@ def run_grid_search(description: str,
         param_grid,
         cv=cv,
         scoring="accuracy",
-        n_jobs=-1,
+        n_jobs=2,  # Limit to 2 cores to prevent system freeze
     )
     grid.fit(X, y, groups=groups)
 
