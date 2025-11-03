@@ -281,10 +281,13 @@ def compute_motion_features(smoothed_xy: List[np.ndarray]) -> Optional[Dict]:
     }
 
 
-def prepare_features(left_states: List[int], right_states: List[int], motion_features: Dict, scaler) -> np.ndarray:
+def prepare_features(left_states: List[int], right_states: List[int], motion_features: Dict, scaler, use_expected_left: bool = False, expected_left: List[int] = None) -> np.ndarray:
     """Prepare features for SVM prediction - same preprocessing as training"""
+    # Use expected left states instead of actual for trigger hand
+    actual_left = expected_left if (use_expected_left and expected_left) else left_states
+    
     # Combine finger states
-    finger_feats = np.array(left_states + right_states, dtype=float).reshape(1, -1)
+    finger_feats = np.array(actual_left + right_states, dtype=float).reshape(1, -1)
     
     # Apply delta weight and add direction features
     motion_array = np.array([[
@@ -306,10 +309,13 @@ def prepare_features(left_states: List[int], right_states: List[int], motion_fea
     return X
 
 
-def prepare_static_features(left_states: List[int], right_states: List[int], delta_magnitude: float, static_scaler=None):
+def prepare_static_features(left_states: List[int], right_states: List[int], delta_magnitude: float, static_scaler=None, use_expected_left: bool = False, expected_left: List[int] = None):
     """Prepare features for static/dynamic classification"""
+    # Use expected left states instead of actual for trigger hand
+    actual_left = expected_left if (use_expected_left and expected_left) else left_states
+    
     # Combine finger states + delta magnitude (matching training)
-    features = np.array([left_states + right_states + [delta_magnitude]], dtype=float)
+    features = np.array([actual_left + right_states + [delta_magnitude]], dtype=float)
     
     if static_scaler:
         features = static_scaler.transform(features)
@@ -332,21 +338,25 @@ def evaluate_with_ml(left_states: List[int], right_states: List[int], motion_fea
     print(f"📏 Expected fingers L:{expected['left_fingers']} R:{expected['right_fingers']}")
     print(f"📏 Recorded fingers L:{left_states} R:{right_states}")
     
-    # Step 1: Strict finger validation
-    if left_states != expected['left_fingers']:
-        return False, "left_fingers", f"Wrong left fingers: got {left_states}, expected {expected['left_fingers']}"
-    
+    # Step 1: Finger validation (only check RIGHT hand, LEFT is trigger only)
+    # LEFT hand is trigger only - don't need strict validation
+    # if left_states != expected['left_fingers']:
+    #     return False, "left_fingers", f"Wrong left fingers: got {left_states}, expected {expected['left_fingers']}"
+
     if right_states != expected['right_fingers']:
         return False, "right_fingers", f"Wrong right fingers: got {right_states}, expected {expected['right_fingers']}"
     
-    print("✅ Finger positions correct!")
+    print("✅ Right hand finger positions correct! (Left hand ignored as trigger)")
     
     # Step 2: Static/Dynamic classification
     is_static_expected = expected['is_static']
     
     if static_dynamic_data and 'model' in static_dynamic_data:
         try:
-            static_features = prepare_static_features(left_states, right_states, motion_features['delta_magnitude'])
+            static_features = prepare_static_features(
+                left_states, right_states, motion_features['delta_magnitude'],
+                use_expected_left=True, expected_left=expected['left_fingers']
+            )
             is_static_predicted = static_dynamic_data['model'].predict(static_features)[0] == 'static'
             print(f"📊 Static/Dynamic: Expected={is_static_expected}, Predicted={is_static_predicted}")
         except:
@@ -404,7 +414,10 @@ def evaluate_with_ml(left_states: List[int], right_states: List[int], motion_fea
     
     # Step 6: ML confidence validation
     try:
-        X = prepare_features(left_states, right_states, motion_features, scaler)
+        X = prepare_features(
+            left_states, right_states, motion_features, scaler,
+            use_expected_left=True, expected_left=expected['left_fingers']
+        )
         
         # Predict gesture
         prediction = svm_model.predict(X)[0]
@@ -526,27 +539,128 @@ def show_gesture_instructions(gesture_name: str, gesture_template: Dict) -> bool
 
 
 def select_gesture(available_gestures: List[str]) -> Optional[str]:
-    """Let user select target gesture"""
-    print("\n🎯 Available Gestures:")
-    for i, gesture in enumerate(available_gestures):
-        print(f"  [{i}] {gesture}")
+    """Let user select target gesture using arrow keys + Enter (Windows compatible)"""
+    import sys
+    import os
     
-    while True:
+    def get_key_windows():
+        """Get keypress for Windows"""
+        import msvcrt
+        key = msvcrt.getch()
+        if key == b'\xe0':  # Special key prefix
+            key = msvcrt.getch()
+            if key == b'H':  # Up arrow
+                return 'UP'
+            elif key == b'P':  # Down arrow
+                return 'DOWN'
+        elif key == b'\r':  # Enter
+            return 'ENTER'
+        elif key == b'\x1b':  # ESC
+            return 'ESC'
+        elif key == b'q':
+            return 'QUIT'
+        return None
+    
+    def get_key_unix():
+        """Get keypress for Unix/Linux"""
+        import termios
+        import tty
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
         try:
-            choice = input(f"\nSelect gesture (0-{len(available_gestures)-1}, Enter for 0): ").strip()
-            if not choice:
-                return available_gestures[0]
-            
-            idx = int(choice)
-            if 0 <= idx < len(available_gestures):
-                return available_gestures[idx]
-            else:
-                print(f"❌ Please enter 0-{len(available_gestures)-1}")
-                
-        except ValueError:
-            print("❌ Please enter a number")
-        except KeyboardInterrupt:
+            tty.setraw(sys.stdin.fileno())
+            key = sys.stdin.read(1)
+            if key == '\x1b':  # ESC sequence
+                key += sys.stdin.read(2)
+                if key == '\x1b[A':
+                    return 'UP'
+                elif key == '\x1b[B':
+                    return 'DOWN'
+                else:
+                    return 'ESC'
+            elif key == '\r' or key == '\n':
+                return 'ENTER'
+            elif key == 'q':
+                return 'QUIT'
             return None
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    
+    def clear_screen():
+        """Clear screen cross-platform"""
+        os.system('cls' if os.name == 'nt' else 'clear')
+    
+    def print_menu(selected_idx):
+        """Print the gesture selection menu"""
+        clear_screen()
+        
+        print("🎯 Select Target Gesture:")
+        print("Use ↑/↓ arrow keys to navigate, Enter to select, ESC/q to quit")
+        print("=" * 50)
+        
+        for i, gesture in enumerate(available_gestures):
+            if i == selected_idx:
+                print(f"  → {gesture} ←")  # Selected item
+            else:
+                print(f"    {gesture}")
+        
+        print("=" * 50)
+        print(f"Gesture {selected_idx + 1}/{len(available_gestures)}")
+    
+    # Choose appropriate key handler based on OS
+    get_key = get_key_windows if os.name == 'nt' else get_key_unix
+    
+    try:
+        selected_idx = 0
+        
+        while True:
+            print_menu(selected_idx)
+            
+            try:
+                key = get_key()
+                
+                if key == 'UP':
+                    selected_idx = (selected_idx - 1) % len(available_gestures)
+                elif key == 'DOWN':
+                    selected_idx = (selected_idx + 1) % len(available_gestures)
+                elif key == 'ENTER':
+                    clear_screen()
+                    print(f"✅ Selected: {available_gestures[selected_idx]}\n")
+                    return available_gestures[selected_idx]
+                elif key == 'ESC' or key == 'QUIT':
+                    clear_screen()
+                    print("❌ Selection cancelled\n")
+                    return None
+                    
+            except KeyboardInterrupt:
+                clear_screen()
+                print("❌ Selection cancelled\n")
+                return None
+                
+    except Exception as e:
+        # Fallback for any system issues
+        clear_screen()
+        print(f"⚠️  Arrow key navigation not available ({str(e)}), using number selection...")
+        print("\n🎯 Available Gestures:")
+        for i, gesture in enumerate(available_gestures):
+            print(f"  [{i}] {gesture}")
+        
+        while True:
+            try:
+                choice = input(f"\nSelect gesture (0-{len(available_gestures)-1}, Enter for 0): ").strip()
+                if not choice:
+                    return available_gestures[0]
+                
+                idx = int(choice)
+                if 0 <= idx < len(available_gestures):
+                    return available_gestures[idx]
+                else:
+                    print(f"❌ Please enter 0-{len(available_gestures)-1}")
+                    
+            except ValueError:
+                print("❌ Please enter a number")
+            except KeyboardInterrupt:
+                return None
 
 
 def format_stats_line(stats: AttemptStats) -> str:
@@ -673,6 +787,7 @@ def run_ml_training_session(camera_index: int = 0):
             left_confident = left_score > 0.6
             right_confident = right_score > 0.6
             left_is_fist = is_fist(left_landmarks) if left_landmarks else False
+            right_is_fist = is_fist(right_landmarks) if right_landmarks else False
             
             # UI Elements
             gesture_type = "STATIC" if gesture_templates[target_gesture]['is_static'] else "DYNAMIC"
@@ -681,7 +796,7 @@ def run_ml_training_session(camera_index: int = 0):
             
             # Show expected finger states
             expected = gesture_templates[target_gesture]
-            finger_info = f"Expected: L{expected['left_fingers']} R{expected['right_fingers']}"
+            finger_info = f"Expected: L{expected['left_fingers']}(trigger) R{expected['right_fingers']}(checked)"
             cv2.putText(frame, finger_info, (20, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
             
             # Status and results
@@ -698,7 +813,7 @@ def run_ml_training_session(camera_index: int = 0):
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
             cv2.putText(frame, "✊ Close LEFT fist to record, release to evaluate", (20, 930), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
-            cv2.putText(frame, "🎯 STRICT MODE: Exact fingers + Direction + 70% confidence", (20, 960), 
+            cv2.putText(frame, "🎯 MODE: RIGHT hand exact + Direction + 70% confidence (LEFT=trigger only)", (20, 960), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 255, 100), 2)
             
             # State machine
