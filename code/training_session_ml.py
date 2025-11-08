@@ -271,13 +271,13 @@ def compute_motion_features(smoothed_xy: List[np.ndarray]) -> Optional[Dict]:
         'main_axis_y': main_y,
         'delta_x': float(delta_x),
         'delta_y': float(delta_y),
+        'raw_dx': dx,
+        'raw_dy': dy,
+        'delta_magnitude': delta_mag,
         'motion_left': motion_left,
         'motion_right': motion_right,
         'motion_up': motion_up,
-        'motion_down': motion_down,
-        'delta_magnitude': delta_mag,
-        'raw_dx': dx,
-        'raw_dy': dy
+        'motion_down': motion_down
     }
 
 
