@@ -16,6 +16,11 @@ SMOOTHING_WINDOW = 3
 MIN_FRAMES = 12
 MIN_CONFIDENCE = 0.7
 
+# Quality validation settings
+REQUIRED_SAMPLES = 5          # Must collect 5 samples
+MIN_CONSISTENT_SAMPLES = 3    # Need at least 3 consistent samples
+SIMILARITY_THRESHOLD = 0.85   # Threshold for considering samples "similar"
+
 # Available gestures for update
 AVAILABLE_GESTURES = [
     'home', 'end', 'next_slide', 'previous_slide',
@@ -25,6 +30,7 @@ AVAILABLE_GESTURES = [
 
 # User-specific data collection
 COLLECTED_SAMPLES = []  # Store samples for real-time analysis
+QUALITY_SAMPLES = []    # Store all 5 samples for quality validation
 USER_NAME = ""  # Will be set during initialization
 CUSTOM_CSV = ""  # Will be set based on user name
 
@@ -48,6 +54,112 @@ MOTION_COLUMNS = [
     'motion_x_end', 'motion_y_end',
 ]
 FEATURE_COLUMNS = ['main_axis_x', 'main_axis_y', 'delta_x', 'delta_y']
+
+def calculate_sample_similarity(sample1, sample2):
+    """Calculate similarity between two gesture samples"""
+    
+    # Compare finger states (most important)
+    finger_similarity = 0.0
+    finger_keys = ['finger_thumb', 'finger_index', 'finger_middle', 'finger_ring', 'finger_pinky']
+    for key in finger_keys:
+        if sample1[key] == sample2[key]:
+            finger_similarity += 0.2  # Each finger is 20%
+    
+    # Compare motion direction (normalized)
+    motion1 = np.array([sample1['motion_x'], sample1['motion_y']])
+    motion2 = np.array([sample2['motion_x'], sample2['motion_y']])
+    
+    # Normalize motion vectors
+    norm1 = np.linalg.norm(motion1)
+    norm2 = np.linalg.norm(motion2)
+    
+    motion_similarity = 0.0
+    if norm1 > 0 and norm2 > 0:
+        # Calculate cosine similarity
+        cosine_sim = np.dot(motion1, motion2) / (norm1 * norm2)
+        motion_similarity = (cosine_sim + 1) / 2  # Convert from [-1,1] to [0,1]
+    
+    # Weighted combination: finger states (70%) + motion direction (30%)
+    total_similarity = finger_similarity * 0.7 + motion_similarity * 0.3
+    
+    return total_similarity
+
+def validate_sample_quality(samples_list):
+    """
+    Validate quality of collected samples
+    Returns: (is_valid, consistent_samples, message)
+    """
+    
+    if len(samples_list) < REQUIRED_SAMPLES:
+        return False, [], f"Need {REQUIRED_SAMPLES - len(samples_list)} more samples"
+    
+    print(f"\n🔍 QUALITY VALIDATION: Analyzing {len(samples_list)} samples...")
+    
+    # Calculate similarity matrix
+    similarities = {}
+    for i in range(len(samples_list)):
+        similarities[i] = {}
+        for j in range(len(samples_list)):
+            if i != j:
+                sim = calculate_sample_similarity(samples_list[i], samples_list[j])
+                similarities[i][j] = sim
+                print(f"   Sample {i+1} vs {j+1}: {sim:.3f} similarity")
+            else:
+                similarities[i][j] = 1.0
+    
+    # Find groups of consistent samples
+    consistent_groups = []
+    used_samples = set()
+    
+    for i in range(len(samples_list)):
+        if i in used_samples:
+            continue
+            
+        # Start new group with sample i
+        group = [i]
+        used_samples.add(i)
+        
+        # Find other samples similar to sample i
+        for j in range(len(samples_list)):
+            if j != i and j not in used_samples:
+                if similarities[i][j] >= SIMILARITY_THRESHOLD:
+                    group.append(j)
+                    used_samples.add(j)
+        
+        if len(group) >= MIN_CONSISTENT_SAMPLES:
+            consistent_groups.append(group)
+    
+    print(f"\n📊 CONSISTENCY ANALYSIS:")
+    for idx, group in enumerate(consistent_groups):
+        group_samples = [samples_list[i] for i in group]
+        # Show finger patterns for this group
+        finger_patterns = []
+        for sample in group_samples:
+            fingers = [int(sample[f'finger_{name}']) for name in ['thumb', 'index', 'middle', 'ring', 'pinky']]
+            finger_patterns.append(fingers)
+        
+        print(f"   Group {idx+1}: {len(group)} samples - Fingers: {finger_patterns[0]}")
+        
+        # Show motion directions
+        motions = [(sample['motion_x'], sample['motion_y']) for sample in group_samples]
+        avg_motion = np.mean(motions, axis=0)
+        print(f"           Average motion: ({avg_motion[0]:.3f}, {avg_motion[1]:.3f})")
+    
+    if not consistent_groups:
+        return False, [], f"❌ No consistent groups found! Need {MIN_CONSISTENT_SAMPLES} similar samples"
+    
+    # Use the largest consistent group
+    best_group = max(consistent_groups, key=len)
+    consistent_samples = [samples_list[i] for i in best_group]
+    
+    print(f"\n✅ VALIDATION RESULT:")
+    print(f"   Found {len(consistent_samples)} consistent samples (need {MIN_CONSISTENT_SAMPLES})")
+    print(f"   Quality: {len(consistent_samples)}/{len(samples_list)} samples are consistent")
+    
+    if len(consistent_samples) >= MIN_CONSISTENT_SAMPLES:
+        return True, consistent_samples, f"✅ Quality OK: {len(consistent_samples)} consistent samples"
+    else:
+        return False, [], f"❌ Need {MIN_CONSISTENT_SAMPLES - len(consistent_samples)} more consistent samples"
 
 def load_reference_data():
     """Load reference data for conflict detection"""
@@ -582,7 +694,7 @@ def select_gesture_to_update():
 
 
 def main():
-    global USER_NAME, CUSTOM_CSV, SESSION_SAMPLES
+    global USER_NAME, CUSTOM_CSV, SESSION_SAMPLES, QUALITY_SAMPLES
     
     print('=== UPDATE GESTURE DEFINITION ===')
     
@@ -598,15 +710,22 @@ def main():
     
     # Clear session samples
     SESSION_SAMPLES = []
+    QUALITY_SAMPLES = []
 
     instance_counter = next_instance_id(CUSTOM_CSV)
-    print(f"\nBat dau thu thap du lieu cho gesture: '{pose_label}'")
-    print("\nHuong dan:")
-    print("  - Dua ca 2 tay vao khung hinh.")
-    print("  - Dieu chinh tay phai theo pose moi, tay trai mo.")
-    print("  - Nam tay trai de bat dau, giu chuyen dong tay phai.")
-    print("  - Mo tay trai de ket thuc 1 lan ghi. Bam 'q' de thoat hoan toan.")
-    print(f"  - Muc tieu: Thu thap 5 mau cho '{pose_label}'\n")
+    print(f"\n🎯 ENHANCED COLLECTION cho gesture: '{pose_label}'")
+    print(f"📋 QUALITY REQUIREMENTS:")
+    print(f"   • Thu thập {REQUIRED_SAMPLES} samples")
+    print(f"   • Cần {MIN_CONSISTENT_SAMPLES}+ samples giống nhau")
+    print(f"   • Similarity threshold: {SIMILARITY_THRESHOLD:.0%}")
+    print(f"   • ❌ Fail validation → Tự động thoát!")
+    
+    print("\n🕹️  HƯỚNG DẪN:")
+    print("  - Đưa cả 2 tay vào khung hình.")
+    print("  - Điều chỉnh tay phải theo pose mới, tay trái mở.")
+    print("  - Nắm tay trái để bắt đầu, giữ chuyển động tay phải.")
+    print("  - Mở tay trái để kết thúc 1 lần ghi. Bấm 'q' để thoát hoàn toàn.")
+    print(f"  - 🎯 MỤC TIÊU: {MIN_CONSISTENT_SAMPLES}/{REQUIRED_SAMPLES} samples consistent!\n")
 
     cap = cv2.VideoCapture(0)
     cv2.namedWindow('Update Gesture Data', cv2.WINDOW_NORMAL)
@@ -718,18 +837,50 @@ def main():
                                 'motion_x': features['delta_x'],
                                 'motion_y': features['delta_y']
                             }
+                            
+                            # Add to quality validation
+                            QUALITY_SAMPLES.append(user_row.copy())
                             SESSION_SAMPLES.append(user_row)
                             
-                            print(f"[INFO] Luu mau #{instance_counter} cho pose '{pose_label}' -> {USER_NAME}. {conflict_msg}")
+                            fingers = [current_right_states[i] for i in range(5)]
+                            print(f"✅ Sample {saved_count + 1}: Fingers={fingers}, Motion=({features['delta_x']:.3f}, {features['delta_y']:.3f})")
                             instance_counter += 1
                             saved_count += 1
                             conflict_message = ""
                             conflict_detected = False
                             
-                            # Check if we have enough samples (target: 5)
-                            if saved_count >= 5:
-                                print(f"✅ Da thu thap du 5 mau cho '{pose_label}'!")
-                                print("Bam 'q' de thoat hoac tiep tuc thu thap them.")
+                            # Check if we have enough samples for quality validation
+                            if saved_count >= REQUIRED_SAMPLES:
+                                # Perform quality validation
+                                is_valid, consistent_samples, message = validate_sample_quality(QUALITY_SAMPLES)
+                                
+                                if is_valid:
+                                    print(f"\n🎉 QUALITY VALIDATION PASSED!")
+                                    print(f"✅ {message}")
+                                    print(f"📊 Using {len(consistent_samples)} consistent samples as template")
+                                    
+                                    # Replace SESSION_SAMPLES with only consistent ones
+                                    SESSION_SAMPLES.clear()
+                                    for sample in consistent_samples:
+                                        SESSION_SAMPLES.append(sample)
+                                    
+                                    # Force exit collection loop
+                                    print(f"🎯 Collection completed with quality validation!")
+                                    break
+                                else:
+                                    print(f"\n❌ QUALITY VALIDATION FAILED!")
+                                    print(f"❌ {message}")
+                                    print(f"\n� COLLECTION REJECTED - Gesture not consistent enough!")
+                                    print(f"💡 Tips for better collection:")
+                                    print(f"   - Keep finger position EXACTLY the same for all 5 samples")
+                                    print(f"   - Keep motion direction consistent")
+                                    print(f"   - Move smoothly and steadily")
+                                    print(f"\n🔄 Please run script again with more consistent gestures")
+                                    
+                                    # Force exit - close camera and terminate
+                                    cap.release()
+                                    cv2.destroyAllWindows()
+                                    return  # Exit main function completely
                             
                 buffer.clear()
                 current_left_states = None
@@ -741,9 +892,11 @@ def main():
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
             cv2.putText(frame, f'UPDATE: {pose_label}', (20, 150),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
-            cv2.putText(frame, f'Samples: {saved_count}/5', (20, 180),
+            cv2.putText(frame, f'Quality: {saved_count}/{REQUIRED_SAMPLES}', (20, 180),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.9, 
-                        (0, 255, 0) if saved_count >= 5 else (255, 255, 255), 2)
+                        (0, 255, 0) if saved_count >= REQUIRED_SAMPLES else (255, 255, 255), 2)
+            cv2.putText(frame, f'Need {MIN_CONSISTENT_SAMPLES}+ consistent', (20, 210),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
             
             # Conflict warning
             if conflict_detected and conflict_message:
@@ -782,18 +935,20 @@ def main():
         cv2.destroyAllWindows()
         print(f"\nĐã thoát. Tổng số lần ghi cho '{pose_label}': {saved_count}.")
         
-        # Save all session samples to ONE CSV file
-        if saved_count > 0:
+        # Save all session samples to ONE CSV file (only if validation passed)
+        if len(SESSION_SAMPLES) > 0:
             user_csv_path = save_session_to_user_folder(pose_label)
             if user_csv_path:
-                print(f"✅ Thu thập thành công! Có thể sử dụng {saved_count} mẫu để update gesture '{pose_label}'.")
+                print(f"✅ Thu thập thành công! Đã validate {len(SESSION_SAMPLES)} mẫu consistent cho gesture '{pose_label}'.")
                 print(f"📁 File đã lưu: {user_csv_path}")
+                print(f"🎯 Quality validated - ready for training!")
             else:
                 print("❌ Lỗi lưu file user CSV.")
-        elif saved_count > 0:
-            print(f"⚠️  Chỉ thu thập được {saved_count}/5 mẫu. Cần thêm {5-saved_count} mẫu nữa.")
+        elif saved_count < REQUIRED_SAMPLES:
+            print(f"⚠️  Chỉ thu thập được {saved_count}/{REQUIRED_SAMPLES} mẫu. Cần thêm {REQUIRED_SAMPLES-saved_count} mẫu nữa.")
+            print("🔄 Chạy lại script để hoàn thành collection.")
         else:
-            print("❌ Không thu thập được mẫu nào.")
+            print("❌ Collection đã bị reject do quality validation fail.")
 
 
 if __name__ == '__main__':

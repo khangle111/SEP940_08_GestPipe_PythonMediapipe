@@ -16,9 +16,82 @@ from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.metrics import classification_report, confusion_matrix, f1_score
 import joblib
 
+def load_existing_balanced_dataset(dataset_file):
+    """Load existing balanced dataset with error variations"""
+    print(f"[LOADING] Loading pre-generated dataset: {dataset_file}")
+    
+    if not os.path.exists(dataset_file):
+        print(f"[ERROR] Dataset file not found: {dataset_file}")
+        print("[INFO] Please run 'python prepare_user_data.py user_X' first")
+        return None
+    
+    df = pd.read_csv(dataset_file)
+    print(f"[SUCCESS] Loaded dataset: {len(df)} samples")
+    print(f"   Gestures: {df['pose_label'].unique().tolist()}")
+    
+    # Show distribution
+    gesture_counts = df['pose_label'].value_counts()
+    print(f"[STATS] Distribution:")
+    for gesture, count in gesture_counts.items():
+        print(f"   {gesture}: {count} samples")
+    
+    return df
+
+def prepare_features_from_dataframe(df):
+    """Prepare features from enhanced dataset DataFrame"""
+    print(f"[PROCESSING] Preparing features from enhanced dataset...")
+    
+    # Extract finger states (10 features)
+    finger_features = []
+    for _, row in df.iterrows():
+        left_fingers = [row[f'left_finger_state_{i}'] for i in range(5)]
+        right_fingers = [row[f'right_finger_state_{i}'] for i in range(5)]
+        finger_features.append(left_fingers + right_fingers)
+    
+    # Extract motion features (8 features) - same as training
+    motion_features = []
+    for _, row in df.iterrows():
+        # Main axis features
+        main_x = row['main_axis_x']  
+        main_y = row['main_axis_y']
+        
+        # Delta features with weight
+        delta_x = row['delta_x'] * 10.0  # Same DELTA_WEIGHT as training
+        delta_y = row['delta_y'] * 10.0
+        
+        # Direction features
+        motion_left = 1.0 if row['delta_x'] < 0 else 0.0
+        motion_right = 1.0 if row['delta_x'] > 0 else 0.0  
+        motion_up = 1.0 if row['delta_y'] < 0 else 0.0
+        motion_down = 1.0 if row['delta_y'] > 0 else 0.0
+        
+        motion_features.append([
+            main_x, main_y, delta_x, delta_y,
+            motion_left, motion_right, motion_up, motion_down
+        ])
+    
+    # Combine features
+    finger_array = np.array(finger_features, dtype=float)
+    motion_array = np.array(motion_features, dtype=float)
+    
+    # Scale motion features (keeping finger states unscaled)
+    from sklearn.preprocessing import StandardScaler
+    motion_scaler = StandardScaler()
+    motion_scaled = motion_scaler.fit_transform(motion_array)
+    
+    # Combine finger + scaled motion
+    X = np.hstack([finger_array, motion_scaled])
+    y = df['pose_label'].values
+    
+    print(f"[SUCCESS] Features prepared: {X.shape} (10 fingers + 8 motion)")
+    print(f"   Labels: {len(np.unique(y))} unique gestures")
+    
+    return X, y
+
 def create_balanced_from_compact(compact_file, output_file, samples_per_gesture=100):
-    """Create balanced dataset from compact file for training"""
-    print(f"Loading compact data from: {compact_file}")
+    """DEPRECATED: Create balanced dataset from compact file for training"""
+    print(f"[WARNING] DEPRECATED: This function creates simple noise-based dataset")
+    print(f"[INFO] Use pre-generated dataset with realistic errors instead")
     
     # Load compact data
     df = pd.read_csv(compact_file)
@@ -176,6 +249,33 @@ def train_gesture_classifier(X, y):
     print("\nClassification Report:")
     print(classification_report(y_test, y_pred))
     
+    # Calculate and display detailed accuracy per gesture
+    from sklearn.metrics import accuracy_score
+    overall_accuracy = accuracy_score(y_test, y_pred)
+    
+    print(f"\n=== DETAILED ACCURACY RESULTS ===")
+    print(f"[OVERALL] Total accuracy: {overall_accuracy:.3f} ({overall_accuracy*100:.1f}%)")
+    print(f"\n[PER-GESTURE] Individual gesture accuracy:")
+    
+    # Calculate accuracy for each gesture
+    unique_labels = sorted(set(y_test))
+    for gesture in unique_labels:
+        # Get indices for this specific gesture
+        gesture_indices = [i for i, label in enumerate(y_test) if label == gesture]
+        
+        if gesture_indices:
+            gesture_y_true = [y_test[i] for i in gesture_indices]
+            gesture_y_pred = [y_pred[i] for i in gesture_indices]
+            
+            # Calculate accuracy for this gesture
+            correct = sum(1 for true, pred in zip(gesture_y_true, gesture_y_pred) if true == pred)
+            total = len(gesture_y_true)
+            gesture_accuracy = correct / total if total > 0 else 0
+            
+            print(f"   {gesture}: {gesture_accuracy:.3f} ({gesture_accuracy*100:.1f}%) - {correct}/{total} samples")
+    
+    print(f"=== END ACCURACY REPORT ===\n")
+    
     return best_model, scaler
 
 def main():
@@ -199,8 +299,27 @@ def main():
     models_dir.mkdir(exist_ok=True)
     training_results_dir.mkdir(exist_ok=True)
     
-    # Load data
-    X, y, df = load_and_prepare_data(args.dataset)
+    print(f"[TARGET] TRAINING USER MODELS")
+    print(f"   Dataset: {args.dataset}")
+    print(f"   Models output: {models_dir}")
+    
+    # Check if we're using the enhanced dataset with errors
+    is_enhanced_dataset = "1000_balanced" in str(args.dataset)
+    
+    if is_enhanced_dataset:
+        print(f"[SUCCESS] Using ENHANCED dataset (70% accurate + 30% errors)")
+        # Load the pre-generated dataset with realistic errors
+        df = load_existing_balanced_dataset(args.dataset)
+        if df is None:
+            return False
+            
+        # Prepare data from existing enhanced dataset
+        X, y = prepare_features_from_dataframe(df)
+        
+    else:
+        print(f"⚠️  Using basic dataset - generating balanced data...")
+        # Load data using old method
+        X, y, df = load_and_prepare_data(args.dataset)
     
     # Train static/dynamic classifier
     static_dynamic_model, static_dynamic_scaler = train_static_dynamic_classifier(X, y)
