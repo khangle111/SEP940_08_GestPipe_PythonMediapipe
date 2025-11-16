@@ -43,6 +43,43 @@ def resolve_user_path(args: argparse.Namespace) -> Path:
     raise ValueError("Cần cung cấp --user-dir, --user-id hoặc đối số user_folder (legacy).")
 
 
+def merge_user_csvs(user_path: Path) -> Path | None:
+    """Gộp tất cả file CSV từ raw_data/ thành một file master"""
+    raw_data_path = user_path / "raw_data"
+    
+    if not raw_data_path.exists():
+        return None
+    
+    all_dfs = []
+    instance_id = 1
+    
+    # Duyệt qua tất cả thư mục con trong raw_data
+    for subdir in raw_data_path.iterdir():
+        if subdir.is_dir():
+            # Tìm file CSV trong thư mục con
+            csv_files = list(subdir.glob("gesture_data_custom_*.csv"))
+            for csv_file in csv_files:
+                print(f"[MERGE] Đọc file: {csv_file}")
+                df = pd.read_csv(csv_file)
+                # Cập nhật instance_id
+                df['instance_id'] = range(instance_id, instance_id + len(df))
+                instance_id += len(df)
+                all_dfs.append(df)
+    
+    if not all_dfs:
+        return None
+    
+    # Gộp tất cả DataFrames
+    merged_df = pd.concat(all_dfs, ignore_index=True)
+    
+    # Lưu file master
+    master_csv = user_path / f"gesture_data_custom_{user_path.name}.csv"
+    merged_df.to_csv(master_csv, index=False)
+    print(f"[MERGE] Đã tạo file master: {master_csv} với {len(merged_df)} mẫu")
+    
+    return master_csv
+
+
 def ensure_custom_csv(user_path: Path, custom_csv: str | None) -> Path:
     """Đảm bảo có file dữ liệu custom và copy vào folder user nếu cần."""
     if custom_csv:
@@ -60,9 +97,15 @@ def ensure_custom_csv(user_path: Path, custom_csv: str | None) -> Path:
 
     candidates = sorted(user_path.glob("gesture_data_custom_*.csv"))
     if not candidates:
-        raise FileNotFoundError(
-            f"Không tìm thấy file custom trong {user_path}. Cần file theo mẫu gesture_data_custom_*.csv"
-        )
+        # Không tìm thấy file custom trực tiếp, thử merge từ raw_data
+        print(f"[INFO] Không tìm thấy file custom trực tiếp, thử merge từ raw_data...")
+        merged_csv = merge_user_csvs(user_path)
+        if merged_csv:
+            return merged_csv
+        else:
+            raise FileNotFoundError(
+                f"Không tìm thấy file custom trong {user_path} hoặc raw_data/. Cần file theo mẫu gesture_data_custom_*.csv"
+            )
     print(f"[INFO] Phát hiện file custom: {candidates[0]}")
     return candidates[0]
 

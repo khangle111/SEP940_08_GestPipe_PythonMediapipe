@@ -285,9 +285,14 @@ def main():
     
     # Determine user folder from dataset path
     dataset_path = Path(args.dataset)
-    if len(dataset_path.parts) > 1 and dataset_path.parts[0].startswith('user_'):
-        # User-specific path (e.g., user_Khang/training_results/gesture_data_compact.csv)
-        user_folder = Path(dataset_path.parts[0])  # Extract user_Khang from path
+    user_folder = None
+    for part in dataset_path.parts:
+        if part.startswith('user_'):
+            user_folder = Path(part)
+            break
+    
+    if user_folder:
+        # User-specific path
         models_dir = user_folder / 'models'
         training_results_dir = user_folder / 'training_results'
     else:
