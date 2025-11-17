@@ -93,7 +93,7 @@ def validate_sample_quality(samples_list):
     if len(samples_list) < REQUIRED_SAMPLES:
         return False, [], f"Need {REQUIRED_SAMPLES - len(samples_list)} more samples"
     
-    print(f"\n🔍 QUALITY VALIDATION: Analyzing {len(samples_list)} samples...")
+    print(f"\n[SEARCH] QUALITY VALIDATION: Analyzing {len(samples_list)} samples...")
     
     # Calculate similarity matrix
     similarities = {}
@@ -129,7 +129,7 @@ def validate_sample_quality(samples_list):
         if len(group) >= MIN_CONSISTENT_SAMPLES:
             consistent_groups.append(group)
     
-    print(f"\n📊 CONSISTENCY ANALYSIS:")
+    print(f"\n[ANALYSIS] CONSISTENCY ANALYSIS:")
     for idx, group in enumerate(consistent_groups):
         group_samples = [samples_list[i] for i in group]
         # Show finger patterns for this group
@@ -146,20 +146,20 @@ def validate_sample_quality(samples_list):
         print(f"           Average motion: ({avg_motion[0]:.3f}, {avg_motion[1]:.3f})")
     
     if not consistent_groups:
-        return False, [], f"❌ No consistent groups found! Need {MIN_CONSISTENT_SAMPLES} similar samples"
+        return False, [], f"[ERROR] No consistent groups found! Need {MIN_CONSISTENT_SAMPLES} similar samples"
     
     # Use the largest consistent group
     best_group = max(consistent_groups, key=len)
     consistent_samples = [samples_list[i] for i in best_group]
     
-    print(f"\n✅ VALIDATION RESULT:")
+    print(f"\n[OK] VALIDATION RESULT:")
     print(f"   Found {len(consistent_samples)} consistent samples (need {MIN_CONSISTENT_SAMPLES})")
     print(f"   Quality: {len(consistent_samples)}/{len(samples_list)} samples are consistent")
     
     if len(consistent_samples) >= MIN_CONSISTENT_SAMPLES:
-        return True, consistent_samples, f"✅ Quality OK: {len(consistent_samples)} consistent samples"
+        return True, consistent_samples, f"[OK] Quality OK: {len(consistent_samples)} consistent samples"
     else:
-        return False, [], f"❌ Need {MIN_CONSISTENT_SAMPLES - len(consistent_samples)} more consistent samples"
+        return False, [], f"[ERROR] Need {MIN_CONSISTENT_SAMPLES - len(consistent_samples)} more consistent samples"
 
 def load_reference_data():
     """Load reference data for conflict detection"""
@@ -167,9 +167,9 @@ def load_reference_data():
     if REFERENCE_DATA is None:
         try:
             REFERENCE_DATA = pd.read_csv('training_results/gesture_data_compact.csv')
-            print(f"✅ Loaded reference data: {len(REFERENCE_DATA)} samples")
+            print(f"[OK] Loaded reference data: {len(REFERENCE_DATA)} samples")
         except Exception as e:
-            print(f"❌ Failed to load reference data: {e}")
+            print(f"[ERROR] Failed to load reference data: {e}")
             REFERENCE_DATA = pd.DataFrame()  # Empty fallback
     return REFERENCE_DATA
 
@@ -211,10 +211,10 @@ def check_gesture_conflict(left_states, right_states, delta_x, delta_y, target_g
             
             if current_direction == ref_direction:
                 # Same finger + same direction = CONFLICT!
-                return True, f"❌ CONFLICT: Same fingers L{left_states}R{right_states} + {ref_direction} direction as existing '{ref_gesture}'"
+                return True, f"[ERROR] CONFLICT: Same fingers L{left_states}R{right_states} + {ref_direction} direction as existing '{ref_gesture}'"
             # If different direction, continue checking (no conflict with this sample)
     
-    return False, f"✅ OK: No conflicts found (direction: {current_direction})"
+    return False, f"[OK] OK: No conflicts found (direction: {current_direction})"
 
 def get_finger_states(hand_landmarks, handedness_label):
     states = [0, 0, 0, 0, 0]
@@ -522,7 +522,7 @@ def save_session_to_user_folder(pose_label):
     individual_df = pd.DataFrame(standard_rows, columns=columns)
     individual_df.to_csv(user_csv, index=False)
     
-    print(f"\n💾 Đã lưu {len(SESSION_SAMPLES)} mẫu (format chuẩn) vào: {user_csv}")
+    print(f"\n[SAVE] Da luu {len(SESSION_SAMPLES)} mau (format chuan) vao: {user_csv}")
     
     # Also update master CSV file in user folder
     update_master_csv_in_user_folder(pose_label, standard_rows, columns)
@@ -606,13 +606,13 @@ def get_user_info():
             # Selected existing user
             selected_user = existing_users[choice]
             custom_csv = f'gesture_data_custom_{selected_user}.csv'
-            print(f'\n✅ Đã chọn user: {selected_user}')
+            print(f'\n[OK] Da chon user: {selected_user}')
             return selected_user, custom_csv
         else:
             # Create new user
             return create_new_user()
     else:
-        print('📂 Chưa có user nào. Tạo user mới:')
+        print('[FOLDER] Chua co user nao. Tao user moi:')
         return create_new_user()
 
 def create_new_user():
@@ -626,8 +626,8 @@ def create_new_user():
         # Validate user name
         if user_name.replace('_', '').replace('-', '').isalnum():
             custom_csv = f'gesture_data_custom_{user_name}.csv'
-            print(f'\n✅ Tạo user mới: {user_name}')
-            print(f'📁 File dữ liệu: {custom_csv}')
+            print(f'\n[OK] Tao user moi: {user_name}')
+            print(f'[FILE] File du lieu: {custom_csv}')
             return user_name, custom_csv
         else:
             print('[ERROR] Tên chỉ được chứa chữ cái, số và dấu gạch dưới.')
@@ -661,7 +661,7 @@ def select_gesture_to_update():
     
     if has_data:
         # Show conflict and ask for confirmation
-        conflict_question = f"⚠️  Gesture '{selected_gesture}' đã tồn tại ({len(existing_files)} file)\n❓ Xóa data cũ và bắt đầu lại?"
+        conflict_question = f"[WARNING] Gesture '{selected_gesture}' da ton tai ({len(existing_files)} file)\n[QUESTION] Xoa data cu va bat dau lai?"
         
         continue_choice = yes_no_menu(conflict_question)
         
@@ -679,17 +679,17 @@ def select_gesture_to_update():
                     os.remove(filepath)
                     deleted_count += 1
                 except Exception as e:
-                    print(f'❌ Lỗi xóa {filename}: {e}')
+                    print(f'[ERROR] Loi xoa {filename}: {e}')
             
-            print(f'\n🗑️  Đã xóa {deleted_count} file cũ cho gesture "{selected_gesture}"')
-            print(f'✅ Bắt đầu thu thập mới cho: {selected_gesture}')
+            print(f'\n[DELETE] Da xoa {deleted_count} file cu cho gesture "{selected_gesture}"')
+            print(f'[OK] Bat dau thu thap moi cho: {selected_gesture}')
             return selected_gesture
         else:
             # User chose not to overwrite, go back to selection
-            print('\n🔄 Chọn gesture khác...')
+            print('\n[RELOAD] Chon gesture khac...')
             return select_gesture_to_update()
     else:
-        print(f'\n✅ Đã chọn gesture mới: {selected_gesture}')
+        print(f'\n[OK] Da chon gesture moi: {selected_gesture}')
         return selected_gesture
 
 
@@ -713,19 +713,19 @@ def main():
     QUALITY_SAMPLES = []
 
     instance_counter = next_instance_id(CUSTOM_CSV)
-    print(f"\n🎯 ENHANCED COLLECTION cho gesture: '{pose_label}'")
+    print(f"\n[TARGET] ENHANCED COLLECTION cho gesture: '{pose_label}'")
     print(f"📋 QUALITY REQUIREMENTS:")
     print(f"   • Thu thập {REQUIRED_SAMPLES} samples")
     print(f"   • Cần {MIN_CONSISTENT_SAMPLES}+ samples giống nhau")
     print(f"   • Similarity threshold: {SIMILARITY_THRESHOLD:.0%}")
-    print(f"   • ❌ Fail validation → Tự động thoát!")
+    print(f"   • [ERROR] Fail validation → Tu dong thoat!")
     
     print("\n🕹️  HƯỚNG DẪN:")
     print("  - Đưa cả 2 tay vào khung hình.")
     print("  - Điều chỉnh tay phải theo pose mới, tay trái mở.")
     print("  - Nắm tay trái để bắt đầu, giữ chuyển động tay phải.")
     print("  - Mở tay trái để kết thúc 1 lần ghi. Bấm 'q' để thoát hoàn toàn.")
-    print(f"  - 🎯 MỤC TIÊU: {MIN_CONSISTENT_SAMPLES}/{REQUIRED_SAMPLES} samples consistent!\n")
+    print(f"  - [TARGET] MUC TIEU: {MIN_CONSISTENT_SAMPLES}/{REQUIRED_SAMPLES} samples consistent!\n")
 
     cap = cv2.VideoCapture(0)
     cv2.namedWindow('Update Gesture Data', cv2.WINDOW_NORMAL)
@@ -843,7 +843,7 @@ def main():
                             SESSION_SAMPLES.append(user_row)
                             
                             fingers = [current_right_states[i] for i in range(5)]
-                            print(f"✅ Sample {saved_count + 1}: Fingers={fingers}, Motion=({features['delta_x']:.3f}, {features['delta_y']:.3f})")
+                            print(f"[OK] Sample {saved_count + 1}: Fingers={fingers}, Motion=({features['delta_x']:.3f}, {features['delta_y']:.3f})")
                             instance_counter += 1
                             saved_count += 1
                             conflict_message = ""
@@ -856,8 +856,8 @@ def main():
                                 
                                 if is_valid:
                                     print(f"\n🎉 QUALITY VALIDATION PASSED!")
-                                    print(f"✅ {message}")
-                                    print(f"📊 Using {len(consistent_samples)} consistent samples as template")
+                                    print(f"[OK] {message}")
+                                    print(f"[ANALYSIS] Using {len(consistent_samples)} consistent samples as template")
                                     
                                     # Replace SESSION_SAMPLES with only consistent ones
                                     SESSION_SAMPLES.clear()
@@ -865,17 +865,17 @@ def main():
                                         SESSION_SAMPLES.append(sample)
                                     
                                     # Force exit collection loop
-                                    print(f"🎯 Collection completed with quality validation!")
+                                    print(f"[TARGET] Collection completed with quality validation!")
                                     break
                                 else:
-                                    print(f"\n❌ QUALITY VALIDATION FAILED!")
-                                    print(f"❌ {message}")
+                                    print(f"\n[ERROR] QUALITY VALIDATION FAILED!")
+                                    print(f"[ERROR] {message}")
                                     print(f"\n� COLLECTION REJECTED - Gesture not consistent enough!")
                                     print(f"💡 Tips for better collection:")
                                     print(f"   - Keep finger position EXACTLY the same for all 5 samples")
                                     print(f"   - Keep motion direction consistent")
                                     print(f"   - Move smoothly and steadily")
-                                    print(f"\n🔄 Please run script again with more consistent gestures")
+                                    print(f"\n[RELOAD] Please run script again with more consistent gestures")
                                     
                                     # Force exit - close camera and terminate
                                     cap.release()
@@ -939,16 +939,16 @@ def main():
         if len(SESSION_SAMPLES) > 0:
             user_csv_path = save_session_to_user_folder(pose_label)
             if user_csv_path:
-                print(f"✅ Thu thập thành công! Đã validate {len(SESSION_SAMPLES)} mẫu consistent cho gesture '{pose_label}'.")
-                print(f"📁 File đã lưu: {user_csv_path}")
-                print(f"🎯 Quality validated - ready for training!")
+                print(f"[OK] Thu thap thanh cong! Da validate {len(SESSION_SAMPLES)} mau consistent cho gesture '{pose_label}'.")
+                print(f"[FILE] File da luu: {user_csv_path}")
+                print(f"[TARGET] Quality validated - ready for training!")
             else:
-                print("❌ Lỗi lưu file user CSV.")
+                print("[ERROR] Loi luu file user CSV.")
         elif saved_count < REQUIRED_SAMPLES:
-            print(f"⚠️  Chỉ thu thập được {saved_count}/{REQUIRED_SAMPLES} mẫu. Cần thêm {REQUIRED_SAMPLES-saved_count} mẫu nữa.")
-            print("🔄 Chạy lại script để hoàn thành collection.")
+            print(f"[WARNING] Chi thu thap duoc {saved_count}/{REQUIRED_SAMPLES} mau. Can them {REQUIRED_SAMPLES-saved_count} mau nua.")
+            print("[RELOAD] Chay lai script de hoan thanh collection.")
         else:
-            print("❌ Collection đã bị reject do quality validation fail.")
+            print("[ERROR] Collection da bi reject do quality validation fail.")
 
 
 if __name__ == '__main__':
