@@ -12,10 +12,10 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.svm import SVC
 
 # === Config ===
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DATASET = os.path.join(BASE_DIR, "gesture_motion_dataset_realistic.csv")
-RESULTS_DIR = Path(BASE_DIR) / "training_results"
-MODELS_DIR = Path(BASE_DIR) / "models"
+BASE_DIR = r"D:\DO_AN\python_mediapipe\hybrid_realtime_pipeline\code\user_Khang"
+DEFAULT_DATASET = r"D:\DO_AN\python_mediapipe\hybrid_realtime_pipeline\code\user_Khang\gesture_data_custom_full.csv"
+RESULTS_DIR = Path(r"D:\DO_AN\python_mediapipe\hybrid_realtime_pipeline\code\user_Khang") / "training_results"
+MODELS_DIR = Path(r"D:\DO_AN\python_mediapipe\hybrid_realtime_pipeline\code\user_Khang") / "models"
 
 LEFT_COLS = [f"left_finger_state_{i}" for i in range(5)]
 RIGHT_COLS = [f"right_finger_state_{i}" for i in range(5)]
@@ -631,165 +631,81 @@ def report_full_dataset(model, label_encoder, X_full, labels_full):
         print(f"  {pose:15s} total={total:4d} correct={correct:4d} wrong={total - correct:3d} accuracy={accuracy*100:5.1f}%")
 
 
-def create_compact_dataset(df, output_path, static_gestures=None, dynamic_gestures=None):
+def create_compact_dataset(df, output_path):
     """Create compact dataset with one representative sample per gesture"""
     print("\n=== CREATING COMPACT DATASET ===")
-
+    
     compact_samples = []
     instance_id = 1
-
-    # Use provided gesture classifications, or auto-detect if not provided
-    if static_gestures is None or dynamic_gestures is None:
-        static_gestures, dynamic_gestures = auto_detect_gesture_types(df)
-
-    # Define gesture directions based on detected types
+    
+    # Define gesture directions
     horizontal_gestures = ['next_slide', 'previous_slide', 'rotate_left', 'rotate_right']
-    vertical_gestures = ['rotate_up', 'rotate_down']
-
-    # Add detected dynamic gestures that have vertical motion patterns
-    vertical_dynamic_gestures = [g for g in dynamic_gestures if 'zoom' in g or 'slide' in g]
-    vertical_gestures.extend(vertical_dynamic_gestures)
-
-    print(f"Static gestures ({len(static_gestures)}): {static_gestures}")
-    print(f"Dynamic gestures ({len(dynamic_gestures)}): {dynamic_gestures}")
-    print(f"Horizontal gestures: {horizontal_gestures}")
-    print(f"Vertical gestures: {vertical_gestures}")
-
+    vertical_gestures = ['rotate_up', 'rotate_down', 'zoom_in', 'zoom_out']
+    
     for gesture in sorted(df['pose_label'].unique()):
         gesture_data = df[df['pose_label'] == gesture].copy()
-
+        
         if len(gesture_data) == 0:
             continue
-
-        print(f"\nProcessing {gesture}...")
-
+        
         # Calculate mode for right finger states AND main axis to find representative sample
         right_cols = [f'right_finger_state_{i}' for i in range(5)]
         mode_cols = right_cols + ['main_axis_x', 'main_axis_y']
         mode_values = gesture_data[mode_cols].mode().iloc[0]  # Get first mode if tie
-
+        
         # Find sample that matches the mode values
         mask = True
         for col in mode_cols:
             mask &= (gesture_data[col] == mode_values[col])
-
+        
         matching_samples = gesture_data[mask]
         if len(matching_samples) > 0:
-            # Choose sample based on gesture type and motion characteristics
+            # Among matching samples, choose the one with motion most aligned to expected direction
             if gesture in horizontal_gestures:
                 # For horizontal gestures, prefer sample with smallest |delta_y| (pure horizontal motion)
                 sample = matching_samples.loc[matching_samples['delta_y'].abs().idxmin()]
-                print(f"  {gesture}: horizontal gesture, chose sample with delta_y={sample['delta_y']:.4f}")
             elif gesture in vertical_gestures:
                 # For vertical gestures, prefer sample with smallest |delta_x| (pure vertical motion)
                 sample = matching_samples.loc[matching_samples['delta_x'].abs().idxmin()]
-                print(f"  {gesture}: vertical gesture, chose sample with delta_x={sample['delta_x']:.4f}")
-            elif gesture in dynamic_gestures:
-                # For dynamic gestures not in predefined categories, choose sample with significant motion
-                motion_magnitude = np.sqrt(matching_samples['delta_x']**2 + matching_samples['delta_y']**2)
-                # Choose sample with motion magnitude > threshold but not too large (avoid outliers)
-                significant_motion = matching_samples[(motion_magnitude > 0.05) & (motion_magnitude < 0.5)]
-                if len(significant_motion) > 0:
-                    # Choose the one closest to median motion magnitude for representativeness
-                    median_motion = motion_magnitude.loc[significant_motion.index].median()
-                    closest_idx = (motion_magnitude.loc[significant_motion.index] - median_motion).abs().idxmin()
-                    sample = significant_motion.loc[closest_idx]
-                else:
-                    # Fallback to largest motion available
-                    sample = matching_samples.loc[motion_magnitude.idxmax()]
-                chosen_magnitude = np.sqrt(sample['delta_x']**2 + sample['delta_y']**2)
-                print(f"  {gesture}: dynamic gesture, chose sample with motion magnitude={chosen_magnitude:.4f}")
             else:
                 # For static gestures, choose the one with smallest motion magnitude
-                motion_magnitude = np.sqrt(matching_samples['delta_x']**2 + matching_samples['delta_y']**2)
+                motion_magnitude = matching_samples[['delta_x', 'delta_y']].abs().sum(axis=1)
                 sample = matching_samples.loc[motion_magnitude.idxmin()]
-                chosen_magnitude = motion_magnitude.loc[sample.name]
-                print(f"  {gesture}: static gesture, chose sample with motion magnitude={chosen_magnitude:.4f}")
         else:
-            # Fallback: match only fingers, then choose based on gesture type
+            # Fallback: match only fingers, then choose largest motion
             mask = True
             for col in right_cols:
                 mask &= (gesture_data[col] == mode_values[col])
             fallback_samples = gesture_data[mask]
             if len(fallback_samples) > 0:
-                motion_magnitude = np.sqrt(fallback_samples['delta_x']**2 + fallback_samples['delta_y']**2)
-                if gesture in dynamic_gestures:
-                    # For dynamic gestures, choose representative motion
-                    significant_motion = fallback_samples[(motion_magnitude > 0.05) & (motion_magnitude < 0.5)]
-                    if len(significant_motion) > 0:
-                        median_motion = motion_magnitude.loc[significant_motion.index].median()
-                        closest_idx = (motion_magnitude.loc[significant_motion.index] - median_motion).abs().idxmin()
-                        sample = significant_motion.loc[closest_idx]
-                    else:
-                        sample = fallback_samples.loc[motion_magnitude.idxmax()]
-                else:
-                    # For static gestures, choose smallest motion
-                    sample = fallback_samples.loc[motion_magnitude.idxmin()]
-                chosen_magnitude = np.sqrt(sample['delta_x']**2 + sample['delta_y']**2)
-                print(f"  {gesture}: fallback selection, motion magnitude={chosen_magnitude:.4f}")
+                motion_magnitude = fallback_samples[['delta_x', 'delta_y']].abs().sum(axis=1)
+                sample = fallback_samples.loc[motion_magnitude.idxmax()]
             else:
                 # Ultimate fallback to first sample
                 sample = gesture_data.iloc[0]
-                chosen_magnitude = np.sqrt(sample['delta_x']**2 + sample['delta_y']**2)
-                print(f"  {gesture}: ultimate fallback, motion magnitude={chosen_magnitude:.4f}")
-
+                print(f"Warning: No sample matches mode for {gesture}, using first sample")
+        
         # Set left fingers to all closed (0 0 0 0 0) as requested
         for i in range(5):
             sample[f'left_finger_state_{i}'] = 0
-
+        
         # Add instance_id
         sample['instance_id'] = instance_id
-
+        
         compact_samples.append(sample)
         instance_id += 1
-
+    
     if compact_samples:
         compact_df = pd.DataFrame(compact_samples)
-
+        
         # Reorder columns to match expected format
         ordered_cols = ['instance_id', 'pose_label'] + LEFT_COLS + RIGHT_COLS + MOTION_COLS
         compact_df = compact_df[ordered_cols]
-
+        
         compact_df.to_csv(output_path, index=False)
         print(f"✅ Created compact dataset: {len(compact_df)} gestures -> {output_path}")
     else:
         print("❌ No samples to create compact dataset")
-
-
-def auto_detect_gesture_types(df: pd.DataFrame):
-    """Auto-detect static and dynamic gestures based on motion patterns."""
-    df = df.copy()
-    
-    # Calculate delta magnitude for each gesture
-    df["delta_mag"] = np.sqrt(df["delta_x"] ** 2 + df["delta_y"] ** 2)
-    
-    # Group by pose_label and calculate average motion
-    gesture_motion = df.groupby("pose_label")["delta_mag"].agg(["mean", "std", "count"]).reset_index()
-    
-    # Classify gestures based on motion threshold
-    static_gestures = []
-    dynamic_gestures = []
-    
-    for _, row in gesture_motion.iterrows():
-        pose = row["pose_label"]
-        mean_motion = row["mean"]
-        
-        # Apply manual overrides first
-        if MANUAL_STATIC_OVERRIDE and pose in MANUAL_STATIC_OVERRIDE:
-            static_gestures.append(pose)
-        elif MANUAL_DYNAMIC_OVERRIDE and pose in MANUAL_DYNAMIC_OVERRIDE:
-            dynamic_gestures.append(pose)
-        # Auto-detect based on threshold
-        elif mean_motion < STATIC_THRESHOLD:
-            static_gestures.append(pose)
-        else:
-            dynamic_gestures.append(pose)
-    
-    print(f"[INFO] Auto-detected gestures:")
-    print(f"  Static ({len(static_gestures)}): {static_gestures}")
-    print(f"  Dynamic ({len(dynamic_gestures)}): {dynamic_gestures}")
-    
-    return static_gestures, dynamic_gestures
 
 
 # === Main ===
@@ -799,8 +715,7 @@ def main(dataset_path: str = DEFAULT_DATASET):
 
     # Auto-detect dataset - try new data first, fallback to old
     datasets_to_try = [
-        "gesture_data_custom_full.csv",  # New custom augmented data
-        "gesture_data_09_10_2025.csv",   # New real data
+        "gesture_data_09_10_2025.csv",  # New real data
         dataset_path,                   # Fallback to default
     ]
     
@@ -832,49 +747,13 @@ def main(dataset_path: str = DEFAULT_DATASET):
     
     # Create compact dataset for practice
     compact_path = RESULTS_DIR / "gesture_data_compact.csv"
-    create_compact_dataset(df, str(compact_path), static_gestures, dynamic_gestures)
+    create_compact_dataset(df, str(compact_path))
     
     print(f"\n=== TRAINING COMPLETE ===")
     print(f"Static/Dynamic classifier: {STATIC_DYNAMIC_PKL}")
     print(f"Main gesture classifier: {MODEL_PKL}")
     print(f"Feature scaler: {SCALER_PKL}")
     print(f"Compact dataset: {compact_path}")
-
-
-def auto_detect_gesture_types(df: pd.DataFrame):
-    """Auto-detect static and dynamic gestures based on motion patterns."""
-    df = df.copy()
-
-    # Calculate delta magnitude for each gesture
-    df["delta_mag"] = np.sqrt(df["delta_x"] ** 2 + df["delta_y"] ** 2)
-
-    # Group by pose_label and calculate average motion
-    gesture_motion = df.groupby("pose_label")["delta_mag"].agg(["mean", "std", "count"]).reset_index()
-
-    # Classify gestures based on motion threshold
-    static_gestures = []
-    dynamic_gestures = []
-
-    for _, row in gesture_motion.iterrows():
-        pose = row["pose_label"]
-        mean_motion = row["mean"]
-
-        # Apply manual overrides first
-        if MANUAL_STATIC_OVERRIDE and pose in MANUAL_STATIC_OVERRIDE:
-            static_gestures.append(pose)
-        elif MANUAL_DYNAMIC_OVERRIDE and pose in MANUAL_DYNAMIC_OVERRIDE:
-            dynamic_gestures.append(pose)
-        # Auto-detect based on threshold
-        elif mean_motion < STATIC_THRESHOLD:
-            static_gestures.append(pose)
-        else:
-            dynamic_gestures.append(pose)
-
-    print(f"[INFO] Auto-detected gestures:")
-    print(f"  Static ({len(static_gestures)}): {static_gestures}")
-    print(f"  Dynamic ({len(dynamic_gestures)}): {dynamic_gestures}")
-
-    return static_gestures, dynamic_gestures
 
 
 def parse_args():

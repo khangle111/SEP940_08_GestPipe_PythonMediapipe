@@ -505,7 +505,7 @@ def save_session_to_user_folder(pose_label):
         ]
         standard_rows.append(row)
     
-    # Standard column names
+    # Standard column names (match 09_10_2025 dataset format - 22 columns)
     columns = [
         'instance_id', 'pose_label',
         'left_finger_state_0', 'left_finger_state_1', 'left_finger_state_2', 'left_finger_state_3', 'left_finger_state_4',

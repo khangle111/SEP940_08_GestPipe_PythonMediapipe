@@ -1,0 +1,11 @@
+instance_id,pose_label,left_finger_state_0,left_finger_state_1,left_finger_state_2,left_finger_state_3,left_finger_state_4,right_finger_state_0,right_finger_state_1,right_finger_state_2,right_finger_state_3,right_finger_state_4,main_axis_x,main_axis_y,delta_x,delta_y
+1,end,0,0,0,0,0,0,0,0,0,1,1,0,-0.0001223981380462,0.0
+2,home,0,0,0,0,0,1,0,0,0,0,1,0,-0.0002613961696624,0.0
+3,next_slide,0,0,0,0,0,0,1,0,0,0,1,0,0.3647963116667684,-0.0002031123710758
+4,previous_slide,0,0,0,0,0,0,1,1,0,0,1,0,-0.2638420760631561,0.0
+5,rotate_down,0,0,0,0,0,1,1,0,0,0,0,1,0.0,0.2617712020874023
+6,rotate_left,0,0,0,0,0,1,1,0,0,0,1,0,-0.2039719820022583,0.0
+7,rotate_right,0,0,0,0,0,1,1,0,0,0,1,0,0.1992542743682861,0.0
+8,rotate_up,0,0,0,0,0,1,1,0,0,0,0,1,0.0,-0.2254938036203384
+9,zoom_in,0,0,0,0,0,1,1,1,0,0,0,1,0.0,-0.3583151251077652
+10,zoom_out,0,0,0,0,0,1,1,1,0,0,0,1,0.0,0.0709550380706787

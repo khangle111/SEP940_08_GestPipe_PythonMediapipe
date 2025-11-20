@@ -1,0 +1,11 @@
+pose_label,best_kernel,best_C,best_gamma,cv_f1_score
+end,rbf,100.0,0.01,0.9682352941176472
+home,rbf,0.1,1,0.9866666666666667
+next_slide,rbf,0.1,0.1,1.0
+previous_slide,rbf,100.0,0.01,0.9829721362229102
+rotate_down,rbf,1.0,auto,0.9277345697780479
+rotate_left,rbf,0.1,1,0.9362415120001326
+rotate_right,rbf,0.1,1,0.946448851597593
+rotate_up,rbf,100.0,0.01,0.9425244755244755
+zoom_in,rbf,100.0,0.1,0.9715605103431191
+zoom_out,rbf,100.0,1,0.9526451664277751

@@ -5,8 +5,11 @@ Chuẩn bị dữ liệu huấn luyện tùy biến cho từng admin/user.
 Luồng mới:
     python prepare_user_data.py --user-id 123 --custom-csv path/to.csv
 
-Luồng cũ (tương thích):
+Luồng cũ (tương thích) - chỉ tạo dữ liệu, không train:
     python prepare_user_data.py user_Khang
+
+Để train luôn sau khi tạo dữ liệu:
+    python prepare_user_data.py user_Khang --train
 """
 
 from __future__ import annotations
@@ -117,29 +120,56 @@ def load_dataframe(path: Path, label: str) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
-def create_compact_dataset(base_df: pd.DataFrame, user_df: pd.DataFrame, out_path: Path) -> pd.DataFrame:
-    """Ghép base + custom thành compact dataset (mỗi gesture 1 sample)."""
+def create_custom_dataset(base_df: pd.DataFrame, user_df: pd.DataFrame, original_df: pd.DataFrame, out_path: Path) -> pd.DataFrame:
+    """Tạo dataset tùy chỉnh: copy tất cả samples từ original cho gestures mặc định, override custom gestures với 100 mẫu."""
     user_gestures = set(user_df["pose_label"].unique())
     samples: list[pd.Series] = []
 
-    print("\n[STEP] Tạo compact dataset...")
-    for _, base_row in base_df.iterrows():
-        gesture = base_row["pose_label"]
+    print("\n[STEP] Tạo custom dataset...")
+    
+    # Copy tất cả samples từ original dataset cho mỗi gesture
+    for gesture in original_df["pose_label"].unique():
         if gesture in user_gestures:
-            chosen = user_df[user_df["pose_label"] == gesture].iloc[0].copy()
-            source = "CUSTOM"
+            # Override với custom gesture: tạo samples từ TẤT CẢ templates custom có sẵn
+            # Mỗi template tạo ra nhiều mẫu với noise
+            gesture_templates = user_df[user_df["pose_label"] == gesture]
+            total_templates = len(gesture_templates)
+            
+            # Tăng số samples cho mỗi template (từ 100 xuống ~50-60 mỗi template)
+            samples_per_template = max(50, CUSTOM_SAMPLES // total_templates)
+            total_samples = samples_per_template * total_templates
+            
+            print(f"   [CUSTOM] {gesture}: {total_templates} templates -> {total_samples} mẫu tổng cộng")
+            print(f"      Mỗi template tạo {samples_per_template} mẫu (70% chính xác, 30% có noise)")
+            
+            np.random.seed(RANDOM_SEED)
+            sample_idx = 0
+            
+            for template_idx, (_, template) in enumerate(gesture_templates.iterrows()):
+                error_count = int(samples_per_template * 0.3)  # 30% có noise
+                
+                for local_idx in range(samples_per_template):
+                    has_error = local_idx < error_count
+                    new_row = add_noise(template.copy(), has_error)
+                    new_row["instance_id"] = len(samples) + 1
+                    new_row["pose_label"] = gesture
+                    samples.append(new_row)
+                    sample_idx += 1
         else:
-            chosen = base_row.copy()
-            source = "BASE"
-        chosen["instance_id"] = len(samples) + 1
-        samples.append(chosen)
-        print(f"   [{source}] {gesture}")
+            # Copy tất cả samples của gesture mặc định từ original
+            gesture_samples = original_df[original_df["pose_label"] == gesture]
+            print(f"   [DEFAULT] {gesture}: copy {len(gesture_samples)} mẫu từ original dataset")
+            
+            for _, sample in gesture_samples.iterrows():
+                sample_copy = sample.copy()
+                sample_copy["instance_id"] = len(samples) + 1
+                samples.append(sample_copy)
 
-    compact_df = pd.DataFrame(samples)
+    custom_df = pd.DataFrame(samples)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    compact_df.to_csv(out_path, index=False)
-    print(f"[SAVED] Compact dataset -> {out_path}")
-    return compact_df
+    custom_df.to_csv(out_path, index=False)
+    print(f"[SAVED] Custom dataset -> {out_path} ({len(custom_df)} mẫu)")
+    return custom_df
 
 
 def add_noise(row: pd.Series, error_mode: bool) -> pd.Series:
@@ -191,52 +221,61 @@ def create_balanced_dataset(
     original_df: pd.DataFrame | None,
     out_path: Path,
 ) -> pd.DataFrame:
-    print("\n[STEP] Tạo balanced dataset...")
-    np.random.seed(RANDOM_SEED)
-    rows: list[pd.Series] = []
-
-    for gesture in compact_df["pose_label"].unique():
-        template = compact_df[compact_df["pose_label"] == gesture].iloc[0]
-        is_custom = gesture in user_gestures
-
-        if not is_custom:
-            originals = original_df[original_df["pose_label"] == gesture] if original_df is not None else None
-            if originals is not None and not originals.empty:
-                print(f"   [DEFAULT] {gesture}: dùng {len(originals)} mẫu gốc")
-                for _, sample in originals.iterrows():
-                    sample_copy = sample.copy()
-                    sample_copy["instance_id"] = len(rows) + 1
-                    rows.append(sample_copy)
-                continue
-
-        if is_custom:
-            print(f"   [CUSTOM] {gesture}: sinh {CUSTOM_SAMPLES} mẫu (30% lỗi)")
-            error_count = int(CUSTOM_SAMPLES * CUSTOM_ERROR_RATIO)
-            for idx in range(CUSTOM_SAMPLES):
-                has_error = idx < error_count
-                new_row = add_noise(template, has_error)
-                new_row["instance_id"] = len(rows) + 1
-                rows.append(new_row)
-        else:
-            print(f"   [DEFAULT] {gesture}: không có dữ liệu gốc, sinh {DEFAULT_SYNTH_SAMPLES} mẫu")
-            for _ in range(DEFAULT_SYNTH_SAMPLES):
-                new_row = add_noise(template, False)
-                new_row["instance_id"] = len(rows) + 1
-                rows.append(new_row)
-
-    balanced_df = pd.DataFrame(rows)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    balanced_df.to_csv(out_path, index=False)
-    print(f"[SAVED] Balanced dataset -> {out_path} ({len(balanced_df)} mẫu)")
-    return balanced_df
+    """DEPRECATED: Không dùng nữa, thay bằng create_custom_dataset"""
+    print("[WARN] create_balanced_dataset is deprecated, using create_custom_dataset instead")
+    return create_custom_dataset(compact_df, pd.DataFrame(), out_path)
 
 
-def run_training(balanced_file: Path, skip_training: bool) -> None:
+def run_training(custom_file: Path, user_path: Path, skip_training: bool) -> None:
     if skip_training:
         print("\n[TRAINING] Bỏ qua bước train (do dùng --skip-training).")
         return
 
-    cmd = [sys.executable, str(SCRIPT_DIR / "train_user_models.py"), "--dataset", str(balanced_file)]
+    # Copy train_motion_svm_all_models.py vào user folder và chỉnh đường dẫn
+    user_train_script = user_path / "train_motion_svm_all_models.py"
+    original_train_script = SCRIPT_DIR / "train_motion_svm_all_models.py"
+    
+    if not original_train_script.exists():
+        print(f"[ERROR] Không tìm thấy script train gốc: {original_train_script}")
+        return
+    
+    # Copy script
+    shutil.copy2(original_train_script, user_train_script)
+    print(f"[COPY] Đã copy train script vào: {user_train_script}")
+    
+    # Chỉnh sửa script để lưu models và training_results vào user folder
+    with open(user_train_script, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    # Thay đổi BASE_DIR, RESULTS_DIR, MODELS_DIR
+    user_dir_str = str(user_path)
+    content = content.replace(
+        'BASE_DIR = os.path.dirname(os.path.abspath(__file__))',
+        f'BASE_DIR = r"{user_dir_str}"'
+    )
+    content = content.replace(
+        'RESULTS_DIR = Path(BASE_DIR) / "training_results"',
+        f'RESULTS_DIR = Path(r"{user_dir_str}") / "training_results"'
+    )
+    content = content.replace(
+        'MODELS_DIR = Path(BASE_DIR) / "models"',
+        f'MODELS_DIR = Path(r"{user_dir_str}") / "models"'
+    )
+    
+    # Thay đổi DEFAULT_DATASET để dùng custom_file
+    custom_file_str = str(custom_file)
+    content = content.replace(
+        'DEFAULT_DATASET = os.path.join(BASE_DIR, "gesture_motion_dataset_realistic.csv")',
+        f'DEFAULT_DATASET = r"{custom_file_str}"'
+    )
+    
+    with open(user_train_script, 'w', encoding='utf-8') as f:
+        f.write(content)
+    
+    print(f"[MODIFY] Đã chỉnh sửa script để lưu vào user folder")
+    
+    # Chạy script đã chỉnh sửa
+    cmd = [sys.executable, str(user_train_script)]
     print("\n[TRAINING] Chạy:", " ".join(cmd))
     print("=" * 60)
 
@@ -247,7 +286,7 @@ def run_training(balanced_file: Path, skip_training: bool) -> None:
         text=True,
         encoding="utf-8",
         errors="replace",
-        cwd=str(SCRIPT_DIR),
+        cwd=str(user_path),  # Chạy trong user folder
         bufsize=1,
     )
 
@@ -265,10 +304,10 @@ def run_training(balanced_file: Path, skip_training: bool) -> None:
     print("=" * 60)
     if code != 0:
         print(f"[ERROR] Train thất bại, exit code {code}")
-        print(f"[HINT] Tự chạy lại: python train_user_models.py --dataset \"{balanced_file}\"")
+        print(f"[HINT] Tự chạy lại: python {user_train_script}")
         return
 
-    summary = [l for l in logs if "F1-score" in l or "accuracy" in l]
+    summary = [l for l in logs if "F1-score" in l or "accuracy" in l or "TRAINING COMPLETE" in l]
     if summary:
         print("\n[SUMMARY]")
         for item in summary:
@@ -313,17 +352,25 @@ def prepare_user_training(args: argparse.Namespace) -> bool:
         original_df = None
 
     compact_file = user_path / "training_results" / "gesture_data_compact.csv"
-    balanced_file = user_path / "gesture_data_1000_balanced.csv"
+    custom_file = user_path / "gesture_data_custom_full.csv"
 
-    compact_df = create_compact_dataset(base_df, user_df, compact_file)
-    balanced_df = create_balanced_dataset(compact_df, set(user_df["pose_label"].unique()), original_df, balanced_file)
+    # Tạo custom dataset: copy tất cả gestures từ gốc, override custom với 100 mẫu
+    custom_df = create_custom_dataset(base_df, user_df, original_df, custom_file)
 
-    run_training(balanced_file, args.skip_training)
+    # Mặc định LUÔN skip training, chỉ prepare dataset
+    # Chỉ train khi user chỉ định --train
+    if args.train:
+        run_training(custom_file, user_path, False)  # Chạy training nếu user muốn
+    else:
+        print("\n[SKIP] Bỏ qua training. Chạy riêng sau:")
+        print(f"   cd {user_path}")
+        print(f"   python train_motion_svm_all_models.py")
 
     print("\n[DONE]")
-    print(f"   Compact : {compact_file} ({len(compact_df)} dòng)")
-    print(f"   Balanced: {balanced_file} ({len(balanced_df)} dòng)")
-    print(f"   Models  : {user_path / 'models'}")
+    print(f"   Custom  : {custom_file} ({len(custom_df)} dòng)")
+    if args.train:
+        print(f"   Models  : {user_path / 'models'}")
+        print(f"   Results : {user_path / 'training_results'}")
     return True
 
 
@@ -340,7 +387,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--custom-csv", help="Đường dẫn file CSV custom vừa thu thập.")
     parser.add_argument("--base-compact", help="Đường dẫn file compact gốc.")
     parser.add_argument("--original-data", help="Đường dẫn dataset mặc định đầy đủ.")
-    parser.add_argument("--skip-training", action="store_true", help="Chỉ tạo dữ liệu, không chạy train.")
+    parser.add_argument("--train", action="store_true", help="Chạy training sau khi tạo dữ liệu.")
     return parser
 
 

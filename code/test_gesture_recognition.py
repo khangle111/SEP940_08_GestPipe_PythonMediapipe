@@ -9,7 +9,28 @@ import numpy as np
 
 # === CONFIG ===
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODELS_DIR = os.path.join(BASE_DIR, "models")
+
+# Auto-detect user folder based on current path
+path_parts = BASE_DIR.split(os.sep)
+user_folder = None
+
+# Check if we're in a user folder (contains 'user_' in path)
+for part in path_parts:
+    if part.startswith('user_'):
+        user_folder = part
+        break
+
+if user_folder:
+    # Running from user folder (e.g., user_Khang, user_ABC, etc.)
+    MODELS_DIR = os.path.join(BASE_DIR, "models")
+    TRAINING_RESULTS_DIR = os.path.join(BASE_DIR, "training_results")
+    print(f"🔄 Using {user_folder}'s personal model and training data")
+else:
+    # Running from main code folder
+    MODELS_DIR = os.path.join(BASE_DIR, "models")
+    TRAINING_RESULTS_DIR = os.path.join(BASE_DIR, "training_results")
+    print("🔄 Using main model and training data")
+
 MODEL_PKL = os.path.join(MODELS_DIR, 'motion_svm_model.pkl')
 SCALER_PKL = os.path.join(MODELS_DIR, 'motion_scaler.pkl')
 STATIC_DYNAMIC_PKL = os.path.join(MODELS_DIR, 'static_dynamic_classifier.pkl')
@@ -17,15 +38,136 @@ BUFFER_SIZE = 60
 SMOOTHING_WINDOW = 3
 MIN_FRAMES = 12
 MIN_CONFIDENCE = 0.7
-MIN_DELTA_MAG = 0.001  # Lowered for static gestures (match training)
-DELTA_WEIGHT = 15.0  # Updated to match training script
+MIN_DELTA_MAG = 0.0005  # Lowered for close distance (70-90cm)
+DELTA_WEIGHT = 10.0  # Updated to match training script
 DISPLAY_DURATION = 3.0  # Display prediction for 3 seconds
-MIN_PREDICTION_CONFIDENCE = 0.40  # Adaptive threshold - lower for raw, higher after boost
+MIN_PREDICTION_CONFIDENCE = 0.60  # Increased for better confidence threshold
 
-# Static gesture detection - Auto-adjust for distance
-STATIC_HOLD_TIME = 1.5  # Hold static gesture for 1.5 seconds
-STATIC_DELTA_THRESHOLD = 0.008  # Further lowered for 2m+ distance
-STATIC_DETECTION_THRESHOLD = 0.005  # Lowered for motion detection during recording
+def load_gesture_patterns_from_training_data(compact_file=None):
+    """Auto-generate gesture patterns from training data với error handling"""
+    try:
+        import pandas as pd
+
+        # Default path
+        if compact_file is None:
+            compact_file = os.path.join(TRAINING_RESULTS_DIR, 'gesture_data_compact.csv')
+
+        if not os.path.exists(compact_file):
+            print(f"⚠️  Warning: Compact dataset not found: {compact_file}")
+            print("   Using fallback patterns...")
+            return get_fallback_patterns()
+
+        df = pd.read_csv(compact_file)
+        print(f"✅ Loaded compact dataset: {len(df)} samples")
+
+        # Detect column format
+        if 'pose_label' in df.columns:
+            gesture_col = 'pose_label'
+            finger_prefix = 'right_finger_state_'
+        elif 'gesture' in df.columns:
+            gesture_col = 'gesture'
+            finger_prefix = 'finger_'
+        else:
+            # Try to detect gesture column
+            possible_gesture_cols = [col for col in df.columns if 'gesture' in col.lower() or 'pose' in col.lower()]
+            if possible_gesture_cols:
+                gesture_col = possible_gesture_cols[0]
+                print(f"   Detected gesture column: {gesture_col}")
+            else:
+                print("⚠️  Warning: No gesture column found, using fallback patterns")
+                return get_fallback_patterns()
+
+        # Detect finger columns
+        finger_cols = [col for col in df.columns if 'finger' in col and 'state' in col]
+        if not finger_cols:
+            # Try alternative patterns
+            finger_cols = [col for col in df.columns if 'finger' in col or 'thumb' in col or 'index' in col]
+
+        if len(finger_cols) < 5:
+            print(f"⚠️  Warning: Only found {len(finger_cols)} finger columns, expected 5")
+            return get_fallback_patterns()
+
+        print(f"   Using gesture column: {gesture_col}")
+        print(f"   Using finger columns: {finger_cols[:5]}")
+
+        patterns = {}
+        unique_gestures = sorted(df[gesture_col].unique())
+
+        for gesture in unique_gestures:
+            gesture_data = df[df[gesture_col] == gesture]
+
+            # Count finger patterns
+            pattern_counts = {}
+            for _, row in gesture_data.iterrows():
+                try:
+                    # Extract finger states (first 5 finger columns)
+                    finger_states = []
+                    for i in range(min(5, len(finger_cols))):
+                        col = finger_cols[i]
+                        state = int(float(row[col])) if pd.notna(row[col]) else 0
+                        finger_states.append(state)
+
+                    pattern_tuple = tuple(finger_states)
+                    pattern_counts[pattern_tuple] = pattern_counts.get(pattern_tuple, 0) + 1
+
+                except (ValueError, KeyError) as e:
+                    continue  # Skip invalid rows
+
+            # Sort by frequency and take top patterns
+            if pattern_counts:
+                sorted_patterns = sorted(pattern_counts.items(), key=lambda x: x[1], reverse=True)
+                top_patterns = []
+                total_samples = len(gesture_data)
+
+                for pattern, count in sorted_patterns:
+                    # Take patterns that appear in at least 3% of samples
+                    if count / total_samples > 0.03:
+                        top_patterns.append(list(pattern))
+                    if len(top_patterns) >= 3:  # Max 3 patterns per gesture
+                        break
+
+                patterns[gesture] = top_patterns
+                print(f"   {gesture}: {len(top_patterns)} patterns from {len(gesture_data)} samples")
+            else:
+                print(f"   {gesture}: No valid patterns found")
+
+        if not patterns:
+            print("⚠️  Warning: No patterns loaded, using fallback")
+            return get_fallback_patterns()
+
+        print(f"✅ Loaded {len(patterns)} gesture patterns")
+        return patterns
+
+    except Exception as e:
+        print(f"⚠️  Warning: Could not load patterns from training data: {e}")
+        print("   Using fallback patterns...")
+        return get_fallback_patterns()
+
+
+def get_fallback_patterns():
+    """Fallback patterns khi không load được từ training data"""
+    return {
+        'home': [[1,0,0,0,0]],
+        'end': [[0,0,0,0,1]],
+        'next_slide': [[0,1,1,0,0]],
+        'previous_slide': [[0,1,1,0,0]],
+        'rotate_right': [[1,1,0,0,0]],
+        'rotate_left': [[1,1,0,0,0]],
+        'rotate_up': [[1,1,0,0,0]],
+        'rotate_down': [[1,1,0,0,0]],
+        'zoom_in': [[1,1,1,0,0]],
+        'zoom_out': [[1,1,1,0,0]],
+        'zoom_in_slide': [[0,1,1,0,0]],
+        'zoom_out_slide': [[0,1,1,0,0]],
+        'start_present': [[1,1,1,1,1]],
+        'end_present': [[1,1,1,1,1]],
+    }
+
+
+# Static gesture detection - Adjusted for close distance (70-90cm)
+STATIC_HOLD_TIME = 1.0  # Reduced for close distance
+STATIC_DELTA_THRESHOLD = 0.003  # Much lower for close distance
+STATIC_DETECTION_THRESHOLD = 0.002  # Lower for close distance motion detection
 
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
@@ -42,23 +184,119 @@ MOTION_COLS = ['main_axis_x', 'main_axis_y', 'delta_x', 'delta_y']
 
 
 def load_model():
-    """Load trained model, scaler, and static/dynamic classifier"""
-    if not os.path.exists(MODEL_PKL) or not os.path.exists(SCALER_PKL):
-        raise FileNotFoundError("Model files not found! Please train the model first.")
-    
-    with open(MODEL_PKL, 'rb') as f:
-        model_data = pickle.load(f)
-    
-    with open(SCALER_PKL, 'rb') as f:
-        scaler = pickle.load(f)
-    
-    # Load static/dynamic classifier
-    static_dynamic_data = None
-    if os.path.exists(STATIC_DYNAMIC_PKL):
-        with open(STATIC_DYNAMIC_PKL, 'rb') as f:
-            static_dynamic_data = pickle.load(f)
-    
-    return model_data['model'], model_data['label_encoder'], scaler, static_dynamic_data
+    """Load trained model, scaler, and static/dynamic classifier với error handling"""
+    if not os.path.exists(MODEL_PKL):
+        raise FileNotFoundError(f"Model file not found: {MODEL_PKL}")
+    if not os.path.exists(SCALER_PKL):
+        raise FileNotFoundError(f"Scaler file not found: {SCALER_PKL}")
+
+    try:
+        with open(MODEL_PKL, 'rb') as f:
+            model_data = pickle.load(f)
+
+        with open(SCALER_PKL, 'rb') as f:
+            scaler = pickle.load(f)
+
+        # Validate model format
+        if 'model' not in model_data or 'label_encoder' not in model_data:
+            raise ValueError("Invalid model format: missing 'model' or 'label_encoder'")
+
+        model = model_data['model']
+        label_encoder = model_data['label_encoder']
+
+        # Check scaler
+        if not hasattr(scaler, 'transform'):
+            raise ValueError("Invalid scaler: missing transform method")
+
+        # Get expected features from scaler
+        expected_features = getattr(scaler, 'n_features_in_', None)
+        if expected_features:
+            print(f"✅ Model expects {expected_features} features")
+        else:
+            print("⚠️  Warning: Could not determine expected features from scaler")
+
+        print(f"✅ Model loaded: {type(model).__name__}")
+        print(f"✅ Available gestures: {len(label_encoder.classes_)} - {list(label_encoder.classes_)}")
+
+        # Load static/dynamic classifier (optional)
+        static_dynamic_data = None
+        if os.path.exists(STATIC_DYNAMIC_PKL):
+            try:
+                with open(STATIC_DYNAMIC_PKL, 'rb') as f:
+                    static_dynamic_data = pickle.load(f)
+                print("✅ Static/dynamic classifier loaded")
+            except Exception as e:
+                print(f"⚠️  Warning: Could not load static/dynamic classifier: {e}")
+
+        return model, label_encoder, scaler, static_dynamic_data
+
+    except Exception as e:
+        raise RuntimeError(f"Failed to load model: {e}")
+
+
+# Load gesture patterns from training data
+GESTURE_PATTERNS = load_gesture_patterns_from_training_data()
+print(f"Loaded {len(GESTURE_PATTERNS)} gesture patterns from training data")
+
+
+def calculate_confidence_boost(predicted_gesture, finger_pattern, gesture_patterns):
+    """Calculate confidence boost based on pattern matching"""
+    if predicted_gesture not in gesture_patterns:
+        return 0.0
+
+    # Convert finger pattern to tuple for comparison
+    current_pattern = tuple(finger_pattern)
+
+    # Check if current pattern matches any training pattern for this gesture
+    matching_patterns = gesture_patterns[predicted_gesture]
+
+    if current_pattern in [tuple(p) for p in matching_patterns]:
+        return 0.2  # Boost for exact match
+    else:
+        # Calculate similarity (how many fingers match)
+        max_similarity = 0
+        for training_pattern in matching_patterns:
+            similarity = sum(a == b for a, b in zip(current_pattern, training_pattern)) / 5.0
+            max_similarity = max(max_similarity, similarity)
+
+        if max_similarity >= 0.8:  # 4 out of 5 fingers match
+            return 0.1
+        elif max_similarity >= 0.6:  # 3 out of 5 fingers match
+            return 0.05
+        else:
+            return -0.1  # Penalty for poor match
+
+
+def prepare_features(left_finger_states, right_finger_states, motion_features, scaler):
+    """Prepare feature vector for prediction (match training preprocessing)"""
+    # Finger features (10): left (5) + right (5)
+    finger_features = left_finger_states + right_finger_states
+
+    # Motion features (8): main_axis_x, main_axis_y, delta_x, delta_y, and direction features
+    main_x = motion_features['main_axis_x']
+    main_y = motion_features['main_axis_y']
+    delta_x = motion_features['delta_x'] * 10.0  # Same DELTA_WEIGHT as training
+    delta_y = motion_features['delta_y'] * 10.0
+
+    # Direction features
+    motion_left = 1.0 if motion_features['delta_x'] < 0 else 0.0
+    motion_right = 1.0 if motion_features['delta_x'] > 0 else 0.0
+    motion_up = 1.0 if motion_features['delta_y'] < 0 else 0.0
+    motion_down = 1.0 if motion_features['delta_y'] > 0 else 0.0
+
+    motion_vals = [main_x, main_y, delta_x, delta_y, motion_left, motion_right, motion_up, motion_down]
+
+    # Convert to numpy arrays
+    finger_array = np.array([finger_features], dtype=float)
+    motion_array = np.array([motion_vals], dtype=float)
+
+    # Scale motion features (finger states stay unscaled)
+    motion_scaled = scaler.transform(motion_array)
+
+    # Combine: finger (unscaled) + motion (scaled)
+    X = np.hstack([finger_array, motion_scaled])
+
+    return X
 
 
 def get_finger_states(hand_landmarks, handedness_label):
@@ -141,7 +379,8 @@ def compute_motion_features(smoothed, is_static=False):
     # Calculate delta magnitude
     delta_mag = np.sqrt(dx**2 + dy**2)
     
-    # For static gestures, allow very small motion but don't return None
+    # For static gestures, always compute features (don't return None)
+    # For dynamic gestures, require minimum motion
     if not is_static and delta_mag < MIN_DELTA_MAG:
         return None
     
@@ -175,25 +414,115 @@ def prepare_features(left_states, right_states, motion_features, scaler):
     """Prepare features for prediction - same preprocessing as training"""
     # Combine finger states
     finger_feats = np.array(left_states + right_states, dtype=float).reshape(1, -1)
-    
+
+    # Calculate direction features
+    motion_left = 1.0 if motion_features['delta_x'] < 0 else 0.0
+    motion_right = 1.0 if motion_features['delta_x'] > 0 else 0.0
+    motion_up = 1.0 if motion_features['delta_y'] < 0 else 0.0
+    motion_down = 1.0 if motion_features['delta_y'] > 0 else 0.0
+
     # Apply delta weight and add direction features
     motion_array = np.array([[
         motion_features['main_axis_x'],
-        motion_features['main_axis_y'], 
+        motion_features['main_axis_y'],
         motion_features['delta_x'] * DELTA_WEIGHT,
         motion_features['delta_y'] * DELTA_WEIGHT,
-        motion_features['motion_left'] * DELTA_WEIGHT,
-        motion_features['motion_right'] * DELTA_WEIGHT,
-        motion_features['motion_up'] * DELTA_WEIGHT,
-        motion_features['motion_down'] * DELTA_WEIGHT
+        motion_left * DELTA_WEIGHT,
+        motion_right * DELTA_WEIGHT,
+        motion_up * DELTA_WEIGHT,
+        motion_down * DELTA_WEIGHT
     ]], dtype=float)
-    
+
     # Scale motion features
     motion_scaled = scaler.transform(motion_array)
-    
+
     # Combine features
     X = np.hstack([finger_feats, motion_scaled])
     return X
+
+    return X
+
+
+def prepare_features(left_states, right_states, motion_features, scaler):
+    """Prepare features for prediction với adaptive feature handling"""
+    try:
+        # Combine finger states (always 10 features) - unscaled
+        finger_feats = np.array(left_states + right_states, dtype=float).reshape(1, -1)
+
+        # Get expected features from scaler
+        scaler_features = getattr(scaler, 'n_features_in_', 8)  # Scaler thường scale 8 motion features
+
+        # Create motion features array
+        motion_left = 1.0 if motion_features['delta_x'] < 0 else 0.0
+        motion_right = 1.0 if motion_features['delta_x'] > 0 else 0.0
+        motion_up = 1.0 if motion_features['delta_y'] < 0 else 0.0
+        motion_down = 1.0 if motion_features['delta_y'] > 0 else 0.0
+
+        if scaler_features == 8:
+            # Standard case: scaler scales 8 motion features
+            motion_array = np.array([[
+                motion_features['main_axis_x'],
+                motion_features['main_axis_y'],
+                motion_features['delta_x'] * DELTA_WEIGHT,
+                motion_features['delta_y'] * DELTA_WEIGHT,
+                motion_left * DELTA_WEIGHT,
+                motion_right * DELTA_WEIGHT,
+                motion_up * DELTA_WEIGHT,
+                motion_down * DELTA_WEIGHT
+            ]], dtype=float)
+
+            # Scale motion features
+            motion_scaled = scaler.transform(motion_array)
+
+            # Combine: 10 fingers (unscaled) + 8 motion (scaled) = 18 features
+            X = np.hstack([finger_feats, motion_scaled])
+
+        elif scaler_features == 4:
+            # Alternative: scaler scales only 4 basic motion features
+            motion_array = np.array([[
+                motion_features['main_axis_x'],
+                motion_features['main_axis_y'],
+                motion_features['delta_x'] * DELTA_WEIGHT,
+                motion_features['delta_y'] * DELTA_WEIGHT
+            ]], dtype=float)
+
+            motion_scaled = scaler.transform(motion_array)
+
+            # Add direction features unscaled
+            direction_features = np.array([[motion_left, motion_right, motion_up, motion_down]], dtype=float)
+            motion_combined = np.hstack([motion_scaled, direction_features])
+
+            X = np.hstack([finger_feats, motion_combined])
+
+        else:
+            # Unknown scaler format - try basic approach
+            print(f"⚠️  Warning: Unexpected scaler features {scaler_features}, using basic adaptation")
+            motion_array = np.array([[
+                motion_features['main_axis_x'],
+                motion_features['main_axis_y'],
+                motion_features['delta_x'] * DELTA_WEIGHT,
+                motion_features['delta_y'] * DELTA_WEIGHT
+            ]], dtype=float)
+
+            try:
+                motion_scaled = scaler.transform(motion_array)
+                X = np.hstack([finger_feats, motion_scaled])
+            except:
+                # If scaling fails, use unscaled
+                X = np.hstack([finger_feats, motion_array])
+
+        # Final validation
+        expected_total = 10 + scaler_features  # fingers + motion
+        if X.shape[1] != expected_total:
+            print(f"⚠️  Warning: Feature mismatch - expected {expected_total}, got {X.shape[1]}")
+
+        return X
+
+    except Exception as e:
+        print(f"❌ Error in prepare_features: {e}")
+        # Emergency fallback - return 18 zeros
+        return np.zeros((1, 18), dtype=float)
+
 
 def prepare_static_features(left_states, right_states, delta_magnitude, static_scaler):
     """Prepare features for static/dynamic classification"""
@@ -231,14 +560,15 @@ def main():
         print(f"[ERROR] Failed to load model: {e}")
         return
     
-    print("\nInstructions:")
+    print("Instructions:")
     print("  - Optimal distance: 70-90cm (close) or 2m+ (far)")
     print("  - Put both hands clearly in frame")
     print("  - Close LEFT fist to start recording gesture")
     print("  - For STATIC gestures: Keep RIGHT hand perfectly still for 1.5s")
     print("  - For DYNAMIC gestures: Move RIGHT hand with LARGE, CLEAR motions")
     print("  - Open LEFT fist to stop and predict")
-    print("  - Press 'q' to quit\n")
+    print("  - Press 'q' to quit")
+    print("")
 
     cap = cv2.VideoCapture(0)
     cv2.namedWindow('Gesture Recognition', cv2.WINDOW_NORMAL)
@@ -320,6 +650,16 @@ def main():
                             recent_motion = np.sqrt((end_point[0] - start_point[0])**2 + 
                                                   (end_point[1] - start_point[1])**2)
                             
+                    # Check for static gesture (consistent finger states + minimal motion)
+                    if len(buffer) > 5:  # Need some buffer for stable detection
+                        # Calculate motion over last few frames
+                        recent_points = list(buffer)[-5:]  # Last 5 points
+                        if len(recent_points) >= 2:
+                            start_point = recent_points[0]
+                            end_point = recent_points[-1]
+                            recent_motion = np.sqrt((end_point[0] - start_point[0])**2 + 
+                                                  (end_point[1] - start_point[1])**2)
+                            
                             # Check if motion is minimal (static gesture)
                             if recent_motion < STATIC_DETECTION_THRESHOLD:
                                 if not is_holding_static:
@@ -327,6 +667,7 @@ def main():
                                     static_start_time = time.time()
                                     static_finger_states = current_right_states.copy()
                                     is_holding_static = True
+                                    print(f'>>> Started static gesture detection...')
                                 else:
                                     # Check if held long enough and finger states are consistent
                                     hold_duration = time.time() - static_start_time
@@ -335,8 +676,14 @@ def main():
                                     if hold_duration >= STATIC_HOLD_TIME and states_consistent:
                                         print(f'>>> Static gesture detected! Held for {hold_duration:.1f}s')
                                         state = 'PREDICT'
+                                    elif not states_consistent:
+                                        # Finger states changed, reset
+                                        is_holding_static = False
+                                        print(f'>>> Finger states changed, resetting static detection')
                             else:
                                 # Motion detected, reset static tracking
+                                if is_holding_static:
+                                    print(f'>>> Motion detected ({recent_motion:.4f}), resetting static detection')
                                 is_holding_static = False
                 
                 # Check if left trigger is opened (no longer in trigger position)
@@ -346,29 +693,31 @@ def main():
 
             elif state == 'PREDICT':
                 # Unified prediction for both static and dynamic gestures
-                final_right_states = static_finger_states if (is_holding_static and static_finger_states) else current_right_states
-                
-                if final_right_states is None:
+                if current_right_states is None:
                     print('[WARN] No right hand finger state -> skipped.')
                 else:
                     try:
-                        # Always compute motion features (handle both static and dynamic)
+                        # Always compute motion features (allow small motions for static gestures)
                         smoothed = smooth_points(list(buffer)) if len(buffer) > 1 else [[0.5, 0.5], [0.5, 0.5]]
-                        motion_features = compute_motion_features(smoothed, is_static=True)  # Allow small motions
+                        motion_features = compute_motion_features(smoothed, is_static=True)  # Always compute
                         
                         if motion_features is None:
                             print('[WARN] Could not compute motion features -> skipped.')
                         else:
-                            # Determine gesture type based on delta magnitude
+                            # Determine gesture type based on detection method and motion
                             delta_mag = motion_features['delta_magnitude']
-                            gesture_type = "STATIC" if delta_mag < STATIC_DELTA_THRESHOLD else "DYNAMIC"
                             
-                            # Use static finger states if we detected static gesture, otherwise current states
-                            prediction_finger_states = static_finger_states if (gesture_type == "STATIC" and static_finger_states) else current_right_states
-                            
+                            if is_holding_static and delta_mag < STATIC_DELTA_THRESHOLD:
+                                gesture_type = "STATIC"
+                                prediction_finger_states = static_finger_states
+                                print(f"  -> Detected as STATIC gesture (held still, delta={delta_mag:.4f})")
+                            else:
+                                gesture_type = "DYNAMIC" 
+                                prediction_finger_states = current_right_states
+                                print(f"  -> Detected as DYNAMIC gesture (motion detected, delta={delta_mag:.4f})")
                             # Prepare features for prediction (match training preprocessing)
                             X = prepare_features(current_left_states or [0, 0, 0, 0, 0],
-                                               prediction_finger_states or final_right_states,
+                                               prediction_finger_states,
                                                motion_features,
                                                scaler)
                             
@@ -379,43 +728,17 @@ def main():
                             
                             # Boost confidence for clear patterns
                             gesture_name = label_encoder.inverse_transform([prediction])[0]
-                            finger_states = prediction_finger_states or final_right_states
+                            finger_states = prediction_finger_states
                             
-                            # Comprehensive confidence boost for ALL clear patterns
-                            dx, dy = motion_features['delta_x'], motion_features['delta_y']
-                            
+                            # Boost confidence based on training data patterns
                             boost_applied = False
                             original_confidence = confidence
-                            
-                            # Static gestures - high confidence if truly static
-                            if gesture_name in ['home', 'end'] and delta_mag < STATIC_DELTA_THRESHOLD:
-                                if ((gesture_name == 'home' and finger_states == [1,0,0,0,0]) or
-                                    (gesture_name == 'end' and finger_states == [0,0,0,0,1])):
-                                    confidence = min(0.98, confidence * 1.8)
-                                    boost_applied = True
-                            
-                            # Slide gestures - boost for correct finger + direction
-                            elif gesture_name in ['next_slide', 'previous_slide'] and finger_states == [0,1,1,0,0]:
-                                if ((gesture_name == 'next_slide' and dx > 0.08) or
-                                    (gesture_name == 'previous_slide' and dx < -0.08)):
-                                    confidence = min(0.95, confidence * 1.6)
-                                    boost_applied = True
-                            
-                            # Rotate gestures - boost for correct finger + direction
-                            elif gesture_name in ['rotate_right', 'rotate_left', 'rotate_up', 'rotate_down'] and finger_states == [1,1,0,0,0]:
-                                if ((gesture_name == 'rotate_right' and dx > 0.08) or
-                                    (gesture_name == 'rotate_left' and dx < -0.08) or
-                                    (gesture_name == 'rotate_up' and dy < -0.08) or
-                                    (gesture_name == 'rotate_down' and dy > 0.08)):
-                                    confidence = min(0.95, confidence * 1.6)
-                                    boost_applied = True
-                            
-                            # Zoom gestures - boost for correct finger + direction  
-                            elif gesture_name in ['zoom_in', 'zoom_out'] and finger_states == [1,1,1,0,0]:
-                                if ((gesture_name == 'zoom_in' and dy < -0.08) or
-                                    (gesture_name == 'zoom_out' and dy > 0.08)):
-                                    confidence = min(0.95, confidence * 1.6)
-                                    boost_applied = True
+
+                            # Use pattern matching boost function
+                            pattern_boost = calculate_confidence_boost(gesture_name, finger_states, GESTURE_PATTERNS)
+                            if pattern_boost != 0.0:
+                                confidence = max(0.1, min(0.95, confidence + pattern_boost))
+                                boost_applied = True
                             
                             # Get top-3 predictions
                             top_indices = np.argsort(probabilities)[::-1][:3]
@@ -427,13 +750,16 @@ def main():
                             
                             # Debug: Display feature values
                             feature_debug = []
+                            feature_debug.append(f"Gesture type: {gesture_type}")
                             feature_debug.append(f"Left fingers: {current_left_states}")
-                            feature_debug.append(f"Right fingers: {prediction_finger_states or final_right_states}")
-                            feature_debug.append(f"Delta magnitude: {delta_mag:.4f} ({'<' if delta_mag < STATIC_DELTA_THRESHOLD else '>='} {STATIC_DELTA_THRESHOLD})")
+                            feature_debug.append(f"Right fingers: {prediction_finger_states}")
+                            feature_debug.append(f"Delta magnitude: {delta_mag:.4f}")
                             feature_debug.append(f"Motion delta: ({motion_features['delta_x']:.3f}, {motion_features['delta_y']:.3f})")
-                            feature_debug.append(f"Was holding static: {is_holding_static}")
+                            feature_debug.append(f"Static detection: {is_holding_static}")
+                            feature_debug.append(f"Pattern matches training data: {pattern_boost > 0}")
                             if boost_applied:
-                                feature_debug.append(f"Confidence boosted: {original_confidence:.3f} → {confidence:.3f}")
+                                boost_type = "boosted" if pattern_boost > 0 else "penalized"
+                                feature_debug.append(f"Pattern boost: {pattern_boost:+.2f}, Confidence: {original_confidence:.3f} → {confidence:.3f} ({boost_type})")
                             
                             # Get gesture name (already defined above)
                             # gesture_name = label_encoder.inverse_transform([prediction])[0]
