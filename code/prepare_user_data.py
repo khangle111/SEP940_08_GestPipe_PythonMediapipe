@@ -29,9 +29,80 @@ DEFAULT_BASE_COMPACT = SCRIPT_DIR / "training_results" / "gesture_data_compact.c
 DEFAULT_ORIGINAL_DATA = SCRIPT_DIR / "gesture_data_09_10_2025.csv"
 
 CUSTOM_SAMPLES = 100
-CUSTOM_ERROR_RATIO = 0.3
+CUSTOM_ERROR_RATIO = 0.25
 DEFAULT_SYNTH_SAMPLES = 80
 RANDOM_SEED = 42
+
+# Constants for custom data generation
+TOTAL_CUSTOM_SAMPLES = 225  # 200-275, chọn 225
+ACCURATE_RATIO = 0.75  # 75% chính xác, 25% có nhiễu
+
+
+def analyze_gesture_pattern(df: pd.DataFrame, gesture: str) -> dict:
+    """Phân tích pattern của gesture để tạo nhiễu thực tế."""
+    gesture_df = df[df["pose_label"] == gesture]
+    if gesture_df.empty:
+        return {}
+    
+    pattern = {}
+    
+    # Finger states: mode (most common)
+    finger_cols = [f"right_finger_state_{i}" for i in range(5)]
+    pattern["finger_mode"] = []
+    for col in finger_cols:
+        if col in gesture_df.columns:
+            mode_val = gesture_df[col].mode()
+            pattern["finger_mode"].append(mode_val.iloc[0] if not mode_val.empty else 0)
+        else:
+            pattern["finger_mode"].append(0)
+    
+    # Motion vectors: mean and std
+    motion_cols = ["delta_x", "delta_y"]
+    for col in motion_cols:
+        if col in gesture_df.columns:
+            pattern[f"{col}_mean"] = gesture_df[col].mean()
+            pattern[f"{col}_std"] = gesture_df[col].std()
+    
+    # Direction if available
+    if "direction" in gesture_df.columns:
+        pattern["direction_mean"] = gesture_df["direction"].mean()
+        pattern["direction_std"] = gesture_df["direction"].std()
+    
+    return pattern
+
+
+def add_gesture_specific_noise(df: pd.DataFrame, pattern: dict) -> pd.DataFrame:
+    """Thêm nhiễu thực tế dựa trên pattern của gesture."""
+    noisy_df = df.copy()
+    
+    # Finger states: flip 1-2 bits so với mode (như lỗi thực tế)
+    if "finger_mode" in pattern:
+        finger_cols = [f"right_finger_state_{i}" for i in range(5)]
+        for idx, row in noisy_df.iterrows():
+            # Flip 1-2 fingers randomly
+            flip_count = np.random.choice([1, 2])
+            flip_indices = np.random.choice(5, flip_count, replace=False)
+            for i in flip_indices:
+                col = finger_cols[i]
+                if col in noisy_df.columns:
+                    noisy_df.at[idx, col] = 1 - row[col]  # Flip
+    
+    # Motion vectors: thêm noise với std từ pattern
+    for col in ["delta_x", "delta_y"]:
+        if f"{col}_std" in pattern and col in noisy_df.columns:
+            std_val = pattern[f"{col}_std"]
+            if std_val > 0:
+                noise = np.random.normal(0, std_val * 0.5, len(noisy_df))  # Nhiễu nhỏ hơn std
+                noisy_df[col] += noise
+    
+    # Direction nếu có
+    if "direction_std" in pattern and "direction" in noisy_df.columns:
+        std_val = pattern["direction_std"]
+        if std_val > 0:
+            noise = np.random.normal(0, std_val * 0.1, len(noisy_df))
+            noisy_df["direction"] += noise
+    
+    return noisy_df
 
 
 def resolve_user_path(args: argparse.Namespace) -> Path:
@@ -47,15 +118,15 @@ def resolve_user_path(args: argparse.Namespace) -> Path:
 
 
 def merge_user_csvs(user_path: Path) -> Path | None:
-    """Gộp tất cả file CSV từ raw_data/ thành một file master"""
+    """Gộp tất cả file CSV từ raw_data/ thành một file master, với logic đặc biệt cho user data"""
     raw_data_path = user_path / "raw_data"
-    
+
     if not raw_data_path.exists():
         return None
-    
+
     all_dfs = []
     instance_id = 1
-    
+
     # Duyệt qua tất cả thư mục con trong raw_data
     for subdir in raw_data_path.iterdir():
         if subdir.is_dir():
@@ -68,21 +139,106 @@ def merge_user_csvs(user_path: Path) -> Path | None:
                 df['instance_id'] = range(instance_id, instance_id + len(df))
                 instance_id += len(df)
                 all_dfs.append(df)
-    
+
     if not all_dfs:
         return None
-    
+
     # Gộp tất cả DataFrames
     merged_df = pd.concat(all_dfs, ignore_index=True)
-    
+
     # Lưu file master
     master_csv = user_path / f"gesture_data_custom_{user_path.name}.csv"
     merged_df.to_csv(master_csv, index=False)
     print(f"[MERGE] Đã tạo file master: {master_csv} với {len(merged_df)} mẫu")
-    
+
     return master_csv
 
 
+def create_enhanced_user_dataset(user_path: Path, custom_csv: Path, reference_csv: Path) -> Path:
+    """Tạo dataset enhanced: loại bỏ custom gestures từ reference, tạo custom data với nhiễu thực tế."""
+    # Load user data và reference data
+    user_df = pd.read_csv(custom_csv)
+    ref_df = pd.read_csv(reference_csv)
+
+    print(f"[ENHANCE] User data: {len(user_df)} samples")
+    print(f"[ENHANCE] Reference data: {len(ref_df)} samples")
+
+    # Lấy user gestures
+    user_gestures = set(user_df["pose_label"].unique())
+    print(f"[ENHANCE] Custom gestures: {sorted(user_gestures)}")
+
+    enhanced_samples = []
+
+    # Xử lý từng gesture
+    for gesture in sorted(ref_df["pose_label"].unique()):
+        if gesture in user_gestures:
+            # User có custom data cho gesture này
+            user_gesture_data = user_df[user_df["pose_label"] == gesture].copy()
+            original_count = len(user_gesture_data)
+
+            # Phân tích pattern từ user data
+            pattern = analyze_gesture_pattern(user_df, gesture)
+            print(f"[ENHANCE] {gesture} pattern: finger_mode={pattern.get('finger_mode', [])}")
+
+            # Tạo custom samples: 75% chính xác, 25% có nhiễu
+            accurate_count = int(TOTAL_CUSTOM_SAMPLES * ACCURATE_RATIO)
+            noise_count = TOTAL_CUSTOM_SAMPLES - accurate_count
+
+            # Samples chính xác: duplicate user data
+            duplicated_accurate = []
+            accurate_per_template = accurate_count // original_count
+            for i in range(accurate_per_template):
+                temp_df = user_gesture_data.copy()
+                duplicated_accurate.append(temp_df)
+            # Thêm phần dư nếu có
+            remaining = accurate_count % original_count
+            if remaining > 0:
+                temp_df = user_gesture_data.head(remaining).copy()
+                duplicated_accurate.append(temp_df)
+            accurate_df = pd.concat(duplicated_accurate, ignore_index=True)
+
+            # Samples có nhiễu: duplicate với nhiễu gesture-specific
+            duplicated_noise = []
+            noise_per_template = noise_count // original_count
+            for i in range(noise_per_template):
+                temp_df = user_gesture_data.copy()
+                # Thêm nhiễu thực tế dựa trên pattern
+                temp_df = add_gesture_specific_noise(temp_df, pattern)
+                duplicated_noise.append(temp_df)
+            # Thêm phần dư
+            remaining_noise = noise_count % original_count
+            if remaining_noise > 0:
+                temp_df = user_gesture_data.head(remaining_noise).copy()
+                temp_df = add_gesture_specific_noise(temp_df, pattern)
+                duplicated_noise.append(temp_df)
+            noise_df = pd.concat(duplicated_noise, ignore_index=True)
+
+            # Combine accurate + noise
+            enhanced_gesture = pd.concat([accurate_df, noise_df], ignore_index=True)
+            enhanced_samples.append(enhanced_gesture)
+            print(f"[ENHANCE] {gesture}: {original_count} -> {len(enhanced_gesture)} samples ({accurate_count} accurate, {noise_count} with noise)")
+
+        else:
+            # Dùng reference data, loại bỏ custom gestures (đã được xử lý ở trên)
+            ref_gesture_data = ref_df[ref_df["pose_label"] == gesture].copy()
+            enhanced_samples.append(ref_gesture_data)
+            print(f"[ENHANCE] {gesture}: {len(ref_gesture_data)} samples (reference)")
+
+    # Combine all
+    final_df = pd.concat(enhanced_samples, ignore_index=True)
+    
+    # Reset instance_id theo thứ tự từ 0
+    final_df['instance_id'] = range(len(final_df))
+
+    # Save enhanced dataset
+    enhanced_csv = user_path / "gesture_data_custom_full.csv"
+    final_df.to_csv(enhanced_csv, index=False)
+
+    print(f"[ENHANCE] Created enhanced dataset: {enhanced_csv}")
+    print(f"[ENHANCE] Total samples: {len(final_df)}")
+    print(f"[ENHANCE] Gestures: {sorted(final_df['pose_label'].unique())}")
+
+    return enhanced_csv
 def ensure_custom_csv(user_path: Path, custom_csv: str | None) -> Path:
     """Đảm bảo có file dữ liệu custom và copy vào folder user nếu cần."""
     if custom_csv:
@@ -140,7 +296,7 @@ def create_custom_dataset(base_df: pd.DataFrame, user_df: pd.DataFrame, original
             total_samples = samples_per_template * total_templates
             
             print(f"   [CUSTOM] {gesture}: {total_templates} templates -> {total_samples} mẫu tổng cộng")
-            print(f"      Mỗi template tạo {samples_per_template} mẫu (70% chính xác, 30% có noise)")
+            print(f"      Mỗi template tạo {samples_per_template} mẫu (75% chính xác, 25% có noise)")
             
             np.random.seed(RANDOM_SEED)
             sample_idx = 0
@@ -354,8 +510,17 @@ def prepare_user_training(args: argparse.Namespace) -> bool:
     compact_file = user_path / "training_results" / "gesture_data_compact.csv"
     custom_file = user_path / "gesture_data_custom_full.csv"
 
-    # Tạo custom dataset: copy tất cả gestures từ gốc, override custom với 100 mẫu
-    custom_df = create_custom_dataset(base_df, user_df, original_df, custom_file)
+    # Tạo enhanced dataset: duplicate user data + merge với reference
+    if original_path.exists():
+        enhanced_file = create_enhanced_user_dataset(user_path, custom_csv, original_path)
+        if enhanced_file:
+            custom_df = pd.read_csv(enhanced_file)
+        else:
+            print("[ERROR] Không thể tạo enhanced dataset")
+            return False
+    else:
+        print("[ERROR] Cần file reference data để tạo enhanced dataset")
+        return False
 
     # Mặc định LUÔN skip training, chỉ prepare dataset
     # Chỉ train khi user chỉ định --train

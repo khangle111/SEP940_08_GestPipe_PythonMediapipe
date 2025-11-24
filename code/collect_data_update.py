@@ -21,12 +21,8 @@ REQUIRED_SAMPLES = 5          # Must collect 5 samples
 MIN_CONSISTENT_SAMPLES = 3    # Need at least 3 consistent samples
 SIMILARITY_THRESHOLD = 0.85   # Threshold for considering samples "similar"
 
-# Available gestures for update
-AVAILABLE_GESTURES = [
-    'home', 'end', 'next_slide', 'previous_slide',
-    'rotate_left', 'rotate_right', 'rotate_up', 'rotate_down',
-    'zoom_in', 'zoom_out'
-]
+# Available gestures for update (loaded from reference data)
+AVAILABLE_GESTURES = []  # Will be populated from CSV file
 
 # User-specific data collection
 COLLECTED_SAMPLES = []  # Store samples for real-time analysis
@@ -173,6 +169,62 @@ def load_reference_data():
             REFERENCE_DATA = pd.DataFrame()  # Empty fallback
     return REFERENCE_DATA
 
+# Global variable to store user data for conflict detection
+USER_GESTURE_DATA = None  # Will be loaded from user folder
+
+def load_user_gesture_data(username):
+    """Load all existing user gesture data for conflict detection"""
+    global USER_GESTURE_DATA
+    if USER_GESTURE_DATA is not None:
+        return USER_GESTURE_DATA
+    
+    user_folder = f"user_{username}"
+    raw_data_folder = os.path.join(user_folder, "raw_data")
+    
+    if not os.path.exists(raw_data_folder):
+        USER_GESTURE_DATA = pd.DataFrame()
+        return USER_GESTURE_DATA
+    
+    # Load all CSV files in raw_data folder
+    all_data = []
+    for filename in os.listdir(raw_data_folder):
+        if filename.startswith(f"gesture_data_custom_{username}_") and filename.endswith('.csv'):
+            try:
+                filepath = os.path.join(raw_data_folder, filename)
+                df = pd.read_csv(filepath)
+                all_data.append(df)
+            except Exception as e:
+                print(f"[WARNING] Failed to load {filename}: {e}")
+    
+    if all_data:
+        USER_GESTURE_DATA = pd.concat(all_data, ignore_index=True)
+        print(f"[OK] Loaded user data: {len(USER_GESTURE_DATA)} samples from {len(all_data)} files")
+    else:
+        USER_GESTURE_DATA = pd.DataFrame()
+        print(f"[INFO] No existing user data found for {username}")
+    
+    return USER_GESTURE_DATA
+
+def load_available_gestures():
+    """Load all available gestures from reference CSV file"""
+    global AVAILABLE_GESTURES
+    try:
+        df = pd.read_csv(DEFAULT_CSV)
+        unique_gestures = sorted(df['pose_label'].unique())
+        AVAILABLE_GESTURES = unique_gestures
+        print(f"[OK] Loaded {len(AVAILABLE_GESTURES)} gestures from reference data: {AVAILABLE_GESTURES}")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Failed to load gestures from {DEFAULT_CSV}: {e}")
+        # Fallback to hardcoded list
+        AVAILABLE_GESTURES = [
+            'home', 'end', 'next_slide', 'previous_slide',
+            'rotate_left', 'rotate_right', 'rotate_up', 'rotate_down',
+            'zoom_in', 'zoom_out'
+        ]
+        print(f"[FALLBACK] Using hardcoded gestures: {AVAILABLE_GESTURES}")
+        return False
+
 def get_motion_direction(delta_x, delta_y, threshold=0.01):
     """Get primary motion direction from delta values"""
     abs_x = abs(delta_x)
@@ -186,35 +238,56 @@ def get_motion_direction(delta_x, delta_y, threshold=0.01):
     else:
         return "down" if delta_y > 0 else "up"
 
-def check_gesture_conflict(left_states, right_states, delta_x, delta_y, target_gesture):
+def check_gesture_conflict(left_states, right_states, delta_x, delta_y, target_gesture, username=None):
     """
-    Check if gesture conflicts with existing reference data
+    Check if gesture conflicts with existing reference data and user data
     Returns: (has_conflict, conflict_message)
     """
+    # Check against reference data
     ref_data = load_reference_data()
-    if ref_data.empty:
-        return False, "No reference data"
-    
-    # Get motion direction of current gesture
-    current_direction = get_motion_direction(delta_x, delta_y)
-    
-    # Check against all reference samples
-    for _, row in ref_data.iterrows():
-        # Check finger pattern match (both hands)
-        ref_left = [int(row[f'left_finger_state_{i}']) for i in range(5)]
-        ref_right = [int(row[f'right_finger_state_{i}']) for i in range(5)]
+    if not ref_data.empty:
+        # Get motion direction of current gesture
+        current_direction = get_motion_direction(delta_x, delta_y)
         
-        if ref_left == left_states and ref_right == right_states:
-            # Same finger pattern! Check motion direction
-            ref_direction = get_motion_direction(row['delta_x'], row['delta_y'])
-            ref_gesture = row['pose_label']
+        # Check against all reference samples
+        for _, row in ref_data.iterrows():
+            # Check finger pattern match (both hands)
+            ref_left = [int(row[f'left_finger_state_{i}']) for i in range(5)]
+            ref_right = [int(row[f'right_finger_state_{i}']) for i in range(5)]
             
-            if current_direction == ref_direction:
-                # Same finger + same direction = CONFLICT!
-                return True, f"[ERROR] CONFLICT: Same fingers L{left_states}R{right_states} + {ref_direction} direction as existing '{ref_gesture}'"
-            # If different direction, continue checking (no conflict with this sample)
+            if ref_left == left_states and ref_right == right_states:
+                # Same finger pattern! Check motion direction
+                ref_direction = get_motion_direction(row['delta_x'], row['delta_y'])
+                ref_gesture = row['pose_label']
+                
+                if current_direction == ref_direction:
+                    # Same finger + same direction = CONFLICT!
+                    return True, f"🚨 CONFLICT with REFERENCE '{ref_gesture}': Same pattern + {ref_direction} direction"
+                # If different direction, continue checking (no conflict with this sample)
     
-    return False, f"[OK] OK: No conflicts found (direction: {current_direction})"
+    # Check against user data if username provided
+    if username:
+        user_data = load_user_gesture_data(username)
+        if not user_data.empty:
+            current_direction = get_motion_direction(delta_x, delta_y)
+            
+            # Check against all user samples
+            for _, row in user_data.iterrows():
+                # Check finger pattern match (both hands)
+                user_left = [int(row[f'left_finger_state_{i}']) for i in range(5)]
+                user_right = [int(row[f'right_finger_state_{i}']) for i in range(5)]
+                
+                if user_left == left_states and user_right == right_states:
+                    # Same finger pattern! Check motion direction
+                    user_direction = get_motion_direction(row['delta_x'], row['delta_y'])
+                    user_gesture = row['pose_label']
+                    
+                    if current_direction == user_direction:
+                        # Same finger + same direction = CONFLICT!
+                        return True, f"⚠️ CONFLICT with YOUR '{user_gesture}': Same pattern + {user_direction} direction"
+                    # If different direction, continue checking (no conflict with this sample)
+    
+    return False, f"[OK] No conflicts found (direction: {get_motion_direction(delta_x, delta_y)})"
 
 def get_finger_states(hand_landmarks, handedness_label):
     states = [0, 0, 0, 0, 0]
@@ -343,7 +416,7 @@ def extract_direction_from_features(features):
     return (0, 0), 0
 
 
-def check_realtime_conflict(new_sample, pose_label, existing_csv='training_results/gesture_data_compact.csv'):
+def check_realtime_conflict(new_sample, pose_label, existing_csv='training_results/gesture_data_compact.csv', username=None):
     """
     Check if new sample conflicts with existing gestures using strict finger+direction matching
     Returns: (has_conflict, conflict_message, conflicting_gestures)
@@ -356,8 +429,8 @@ def check_realtime_conflict(new_sample, pose_label, existing_csv='training_resul
         delta_x = features['delta_x']
         delta_y = features['delta_y']
         
-        # Use the new conflict detection logic
-        has_conflict, conflict_msg = check_gesture_conflict(left_states, right_states, delta_x, delta_y, pose_label)
+        # Use the new conflict detection logic (includes both reference and user data)
+        has_conflict, conflict_msg = check_gesture_conflict(left_states, right_states, delta_x, delta_y, pose_label, username)
         
         if has_conflict:
             return True, conflict_msg, []
@@ -698,10 +771,16 @@ def main():
     
     print('=== UPDATE GESTURE DEFINITION ===')
     
+    # Load available gestures from reference data
+    load_available_gestures()
+    
     # Get user info and setup custom CSV
     USER_NAME, CUSTOM_CSV = get_user_info()
     if not USER_NAME:
         return
+    
+    # Load existing user gesture data for conflict detection
+    load_user_gesture_data(USER_NAME)
     
     # Select gesture to update
     pose_label = select_gesture_to_update()
@@ -810,7 +889,7 @@ def main():
                             'features': features
                         }
                         
-                        has_conflict, conflict_msg, conflicting_gestures = check_realtime_conflict(sample_data, pose_label)
+                        has_conflict, conflict_msg, conflicting_gestures = check_realtime_conflict(sample_data, pose_label, username=USER_NAME)
                         
                         if has_conflict:
                             print(f"🚨 {conflict_msg}")

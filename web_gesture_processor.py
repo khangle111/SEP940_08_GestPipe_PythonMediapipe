@@ -9,14 +9,24 @@ import json
 import base64
 import cv2
 import numpy as np
-from training_session import GestureTrainingSession
+import os
+from training_session_web import GestureTrainingSession
 import io
 from PIL import Image
 
 class WebGestureProcessor:
     def __init__(self, gesture_name):
         self.gesture_name = gesture_name
-        self.training_session = GestureTrainingSession()
+        
+        # Configure absolute paths to models and training_results
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        models_dir = os.path.join(script_dir, 'code', 'models')
+        training_results_dir = os.path.join(script_dir, 'code', 'training_results')
+        
+        self.training_session = GestureTrainingSession(
+            models_dir=models_dir,
+            training_results_dir=training_results_dir
+        )
         self.session_active = False
         
         # Load gesture template

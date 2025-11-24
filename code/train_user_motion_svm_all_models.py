@@ -12,10 +12,17 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.svm import SVC
 
 # === Config ===
-BASE_DIR = r"D:\DO_AN\python_mediapipe\hybrid_realtime_pipeline\code\user_Khang"
-DEFAULT_DATASET = r"D:\DO_AN\python_mediapipe\hybrid_realtime_pipeline\code\user_Khang\gesture_data_custom_full.csv"
-RESULTS_DIR = Path(r"D:\DO_AN\python_mediapipe\hybrid_realtime_pipeline\code\user_Khang") / "training_results"
-MODELS_DIR = Path(r"D:\DO_AN\python_mediapipe\hybrid_realtime_pipeline\code\user_Khang") / "models"
+# Always use the code directory as base, regardless of where the script is run from
+CODE_DIR = os.path.dirname(os.path.abspath(__file__))
+if CODE_DIR.endswith('user_Bi') or CODE_DIR.endswith('user_Khang'):
+    # If running from user folder, go up one level
+    BASE_DIR = os.path.dirname(CODE_DIR)
+else:
+    BASE_DIR = CODE_DIR
+
+DEFAULT_DATASET = os.path.join(BASE_DIR, "gesture_data_custom_full.csv")
+RESULTS_DIR = Path(BASE_DIR) / "training_results"
+MODELS_DIR = Path(BASE_DIR) / "models"
 
 LEFT_COLS = [f"left_finger_state_{i}" for i in range(5)]
 RIGHT_COLS = [f"right_finger_state_{i}" for i in range(5)]
@@ -24,9 +31,9 @@ MOTION_COLS = ["main_axis_x", "main_axis_y", "delta_x", "delta_y"]
 DELTA_WEIGHT = 15.0  # Increased from 5.0 to emphasize motion direction
 MIN_DELTA_MAG = 0.001  # Lowered to preserve static gesture data (was 0.05)
 
-COARSE_C_VALUES = [0.1, 1, 10]  # Further reduced to prevent system overload  
-COARSE_GAMMA_VALUES = [0.01, 0.1, "auto"]  # Further reduced to prevent system overload
-FINE_MULTIPLIERS = [1.0, 2.0]  # Further reduced to prevent system overload
+COARSE_C_VALUES = [0.1, 1, 10]  # Comprehensive search for best model
+COARSE_GAMMA_VALUES = [0.01, 0.1, "auto"]  # Comprehensive search for best model
+FINE_MULTIPLIERS = [1.0, 2.0]   # Comprehensive search for best model
 
 RESULTS_DIR.mkdir(exist_ok=True)
 MODELS_DIR.mkdir(exist_ok=True)
@@ -400,7 +407,7 @@ def train_multiclass(X, labels, groups, train_idx, test_idx, scaler):
         X_train,
         y_train,
         train_groups,
-        kernels=["linear", "poly", "rbf", "sigmoid"],
+        kernels=["linear", "poly", "rbf", "sigmoid"],  # Comprehensive kernels for best model
         Cs=COARSE_C_VALUES,
         gammas=COARSE_GAMMA_VALUES,
         output_name="grid_results_coarse_multiclass.csv",
@@ -480,6 +487,7 @@ def evaluate_pose_binary(X, labels, groups, train_idx, test_idx, label_encoder, 
         print(f"Auto-detected DYNAMIC gestures: {dynamic_gestures}")
     
     summary_rows = []
+    pose_accuracies = {}
 
     for pose in poses:
         print(f"\n--- Pose: {pose} ---")
@@ -569,6 +577,7 @@ def evaluate_pose_binary(X, labels, groups, train_idx, test_idx, label_encoder, 
             'test_f1_score': report_dict[pose]['f1-score'],
         }
         summary_rows.append(pose_metrics)
+        pose_accuracies[pose] = report_dict['accuracy']
 
     if summary_rows:
         summary_df = pd.DataFrame(summary_rows)
@@ -609,6 +618,8 @@ def evaluate_pose_binary(X, labels, groups, train_idx, test_idx, label_encoder, 
         print(f"\nAverage CV F1-Score: {summary_df['cv_f1_score'].mean():.3f}")
         print(f"Average Test F1-Score: {summary_df['test_f1_score'].mean():.3f}")
         print("="*80)
+    
+    return pose_accuracies
 
 
 def report_full_dataset(model, label_encoder, X_full, labels_full):
@@ -631,91 +642,404 @@ def report_full_dataset(model, label_encoder, X_full, labels_full):
         print(f"  {pose:15s} total={total:4d} correct={correct:4d} wrong={total - correct:3d} accuracy={accuracy*100:5.1f}%")
 
 
-def create_compact_dataset(df, output_path):
+def create_compact_dataset(df, output_path, static_gestures=None, dynamic_gestures=None, pose_accuracies=None):
     """Create compact dataset with one representative sample per gesture"""
     print("\n=== CREATING COMPACT DATASET ===")
-    
+
     compact_samples = []
     instance_id = 1
-    
-    # Define gesture directions
+
+    # Use provided gesture classifications, or auto-detect if not provided
+    if static_gestures is None or dynamic_gestures is None:
+        static_gestures, dynamic_gestures = auto_detect_gesture_types(df)
+
+    # Define gesture directions based on detected types
     horizontal_gestures = ['next_slide', 'previous_slide', 'rotate_left', 'rotate_right']
-    vertical_gestures = ['rotate_up', 'rotate_down', 'zoom_in', 'zoom_out']
-    
+    vertical_gestures = ['rotate_up', 'rotate_down']
+
+    # Add detected dynamic gestures that have vertical motion patterns
+    vertical_dynamic_gestures = [g for g in dynamic_gestures if 'zoom' in g or 'slide' in g]
+    vertical_gestures.extend(vertical_dynamic_gestures)
+
+    print(f"Static gestures ({len(static_gestures)}): {static_gestures}")
+    print(f"Dynamic gestures ({len(dynamic_gestures)}): {dynamic_gestures}")
+    print(f"Horizontal gestures: {horizontal_gestures}")
+    print(f"Vertical gestures: {vertical_gestures}")
+
     for gesture in sorted(df['pose_label'].unique()):
         gesture_data = df[df['pose_label'] == gesture].copy()
-        
+
         if len(gesture_data) == 0:
             continue
-        
+
+        print(f"\nProcessing {gesture}...")
+
         # Calculate mode for right finger states AND main axis to find representative sample
         right_cols = [f'right_finger_state_{i}' for i in range(5)]
         mode_cols = right_cols + ['main_axis_x', 'main_axis_y']
         mode_values = gesture_data[mode_cols].mode().iloc[0]  # Get first mode if tie
-        
+
         # Find sample that matches the mode values
         mask = True
         for col in mode_cols:
             mask &= (gesture_data[col] == mode_values[col])
-        
+
         matching_samples = gesture_data[mask]
         if len(matching_samples) > 0:
-            # Among matching samples, choose the one with motion most aligned to expected direction
+            # Choose sample based on gesture type and motion characteristics
             if gesture in horizontal_gestures:
                 # For horizontal gestures, prefer sample with smallest |delta_y| (pure horizontal motion)
                 sample = matching_samples.loc[matching_samples['delta_y'].abs().idxmin()]
+                print(f"  {gesture}: horizontal gesture, chose sample with delta_y={sample['delta_y']:.4f}")
             elif gesture in vertical_gestures:
                 # For vertical gestures, prefer sample with smallest |delta_x| (pure vertical motion)
                 sample = matching_samples.loc[matching_samples['delta_x'].abs().idxmin()]
+                print(f"  {gesture}: vertical gesture, chose sample with delta_x={sample['delta_x']:.4f}")
+            elif gesture in dynamic_gestures:
+                # For dynamic gestures not in predefined categories, choose sample with significant motion
+                motion_magnitude = np.sqrt(matching_samples['delta_x']**2 + matching_samples['delta_y']**2)
+                # Choose sample with motion magnitude > threshold but not too large (avoid outliers)
+                significant_motion = matching_samples[(motion_magnitude > 0.05) & (motion_magnitude < 0.5)]
+                if len(significant_motion) > 0:
+                    # Choose the one closest to median motion magnitude for representativeness
+                    median_motion = motion_magnitude.loc[significant_motion.index].median()
+                    closest_idx = (motion_magnitude.loc[significant_motion.index] - median_motion).abs().idxmin()
+                    sample = significant_motion.loc[closest_idx]
+                else:
+                    # Fallback to largest motion available
+                    sample = matching_samples.loc[motion_magnitude.idxmax()]
+                chosen_magnitude = np.sqrt(sample['delta_x']**2 + sample['delta_y']**2)
+                print(f"  {gesture}: dynamic gesture, chose sample with motion magnitude={chosen_magnitude:.4f}")
             else:
                 # For static gestures, choose the one with smallest motion magnitude
-                motion_magnitude = matching_samples[['delta_x', 'delta_y']].abs().sum(axis=1)
+                motion_magnitude = np.sqrt(matching_samples['delta_x']**2 + matching_samples['delta_y']**2)
                 sample = matching_samples.loc[motion_magnitude.idxmin()]
+                chosen_magnitude = motion_magnitude.loc[sample.name]
+                print(f"  {gesture}: static gesture, chose sample with motion magnitude={chosen_magnitude:.4f}")
         else:
-            # Fallback: match only fingers, then choose largest motion
+            # Fallback: match only fingers, then choose based on gesture type
             mask = True
             for col in right_cols:
                 mask &= (gesture_data[col] == mode_values[col])
             fallback_samples = gesture_data[mask]
             if len(fallback_samples) > 0:
-                motion_magnitude = fallback_samples[['delta_x', 'delta_y']].abs().sum(axis=1)
-                sample = fallback_samples.loc[motion_magnitude.idxmax()]
+                motion_magnitude = np.sqrt(fallback_samples['delta_x']**2 + fallback_samples['delta_y']**2)
+                if gesture in dynamic_gestures:
+                    # For dynamic gestures, choose representative motion
+                    significant_motion = fallback_samples[(motion_magnitude > 0.05) & (motion_magnitude < 0.5)]
+                    if len(significant_motion) > 0:
+                        median_motion = motion_magnitude.loc[significant_motion.index].median()
+                        closest_idx = (motion_magnitude.loc[significant_motion.index] - median_motion).abs().idxmin()
+                        sample = significant_motion.loc[closest_idx]
+                    else:
+                        sample = fallback_samples.loc[motion_magnitude.idxmax()]
+                else:
+                    # For static gestures, choose smallest motion
+                    sample = fallback_samples.loc[motion_magnitude.idxmin()]
+                chosen_magnitude = np.sqrt(sample['delta_x']**2 + sample['delta_y']**2)
+                print(f"  {gesture}: fallback selection, motion magnitude={chosen_magnitude:.4f}")
             else:
                 # Ultimate fallback to first sample
                 sample = gesture_data.iloc[0]
-                print(f"Warning: No sample matches mode for {gesture}, using first sample")
-        
+                chosen_magnitude = np.sqrt(sample['delta_x']**2 + sample['delta_y']**2)
+                print(f"  {gesture}: ultimate fallback, motion magnitude={chosen_magnitude:.4f}")
+
         # Set left fingers to all closed (0 0 0 0 0) as requested
         for i in range(5):
             sample[f'left_finger_state_{i}'] = 0
-        
+
         # Add instance_id
         sample['instance_id'] = instance_id
-        
+        sample['accuracy'] = pose_accuracies.get(gesture, 0) if pose_accuracies else 0
+
         compact_samples.append(sample)
         instance_id += 1
-    
+
     if compact_samples:
         compact_df = pd.DataFrame(compact_samples)
-        
+
         # Reorder columns to match expected format
-        ordered_cols = ['instance_id', 'pose_label'] + LEFT_COLS + RIGHT_COLS + MOTION_COLS
+        ordered_cols = ['instance_id', 'pose_label'] + LEFT_COLS + RIGHT_COLS + MOTION_COLS + ['accuracy']
         compact_df = compact_df[ordered_cols]
-        
+
         compact_df.to_csv(output_path, index=False)
         print(f"✅ Created compact dataset: {len(compact_df)} gestures -> {output_path}")
     else:
         print("❌ No samples to create compact dataset")
 
 
+def auto_detect_gesture_types(df: pd.DataFrame):
+    """Auto-detect static and dynamic gestures based on motion patterns."""
+    df = df.copy()
+    
+    # Calculate delta magnitude for each gesture
+    df["delta_mag"] = np.sqrt(df["delta_x"] ** 2 + df["delta_y"] ** 2)
+    
+    # Group by pose_label and calculate average motion
+    gesture_motion = df.groupby("pose_label")["delta_mag"].agg(["mean", "std", "count"]).reset_index()
+    
+    # Classify gestures based on motion threshold
+    static_gestures = []
+    dynamic_gestures = []
+    
+    for _, row in gesture_motion.iterrows():
+        pose = row["pose_label"]
+        mean_motion = row["mean"]
+        
+        # Apply manual overrides first
+        if MANUAL_STATIC_OVERRIDE and pose in MANUAL_STATIC_OVERRIDE:
+            static_gestures.append(pose)
+        elif MANUAL_DYNAMIC_OVERRIDE and pose in MANUAL_DYNAMIC_OVERRIDE:
+            dynamic_gestures.append(pose)
+        # Auto-detect based on threshold
+        elif mean_motion < STATIC_THRESHOLD:
+            static_gestures.append(pose)
+        else:
+            dynamic_gestures.append(pose)
+    
+    print(f"[INFO] Auto-detected gestures:")
+    print(f"  Static ({len(static_gestures)}): {static_gestures}")
+    print(f"  Dynamic ({len(dynamic_gestures)}): {dynamic_gestures}")
+    
+    return static_gestures, dynamic_gestures
+
+
+def get_available_users():
+    """Get list of available user folders"""
+    users = []
+    if os.path.exists(BASE_DIR):
+        for item in os.listdir(BASE_DIR):
+            if item.startswith('user_') and os.path.isdir(os.path.join(BASE_DIR, item)):
+                username = item.replace('user_', '')
+                users.append(username)
+    return sorted(users)
+
+
+def setup_user_config(username: str):
+    """Setup configuration for specific user"""
+    global RESULTS_DIR, MODELS_DIR, MODEL_PKL, SCALER_PKL, STATIC_DYNAMIC_PKL
+    
+    user_folder = f"user_{username}"
+    user_path = os.path.join(BASE_DIR, user_folder)
+    
+    if not os.path.exists(user_path):
+        raise FileNotFoundError(f"User folder not found: {user_path}")
+    
+    RESULTS_DIR = Path(user_path) / "training_results"
+    MODELS_DIR = Path(user_path) / "models"
+    
+    RESULTS_DIR.mkdir(exist_ok=True)
+    MODELS_DIR.mkdir(exist_ok=True)
+    
+    MODEL_PKL = str(MODELS_DIR / "motion_svm_model.pkl")
+    SCALER_PKL = str(MODELS_DIR / "motion_scaler.pkl")
+    STATIC_DYNAMIC_PKL = str(MODELS_DIR / "static_dynamic_classifier.pkl")
+    
+    print(f"[INFO] Configured for user: {username}")
+    print(f"[INFO] Models dir: {MODELS_DIR}")
+    print(f"[INFO] Results dir: {RESULTS_DIR}")
+
+
+def select_and_train_user():
+    """Interactive user selection and training"""
+    users = get_available_users()
+
+    if not users:
+        print("❌ No user folders found! (folders should start with 'user_')")
+        return
+
+    print("👥 AVAILABLE USERS:")
+    for i, user in enumerate(users, 1):
+        user_folder = f"user_{user}"
+
+        # Check available datasets
+        full_dataset = os.path.join(BASE_DIR, user_folder, "gesture_data_custom_full.csv")
+        master_dataset = os.path.join(BASE_DIR, user_folder, "gesture_data_custom_{user}.csv")
+
+        dataset_status = ""
+        if os.path.exists(full_dataset):
+            dataset_status = "✅ Full dataset ready"
+        elif os.path.exists(master_dataset):
+            dataset_status = "✅ Master CSV ready"
+        else:
+            dataset_status = "❌ No dataset found"
+
+        print(f"  {i}. {user} - {dataset_status}")
+
+    print(f"  {len(users)+1}. Train ALL users")
+    print()
+
+    while True:
+        try:
+            choice = input(f"Select user (1-{len(users)+1}) or 'q' to quit: ").strip().lower()
+            if choice == 'q':
+                return
+
+            choice_num = int(choice)
+            if 1 <= choice_num <= len(users):
+                username = users[choice_num - 1]
+                train_user_model(username)
+                break
+            elif choice_num == len(users) + 1:
+                train_all_users()
+                break
+            else:
+                print("Invalid choice!")
+        except ValueError:
+            print("Please enter a number!")
+
+
+def train_user_model(username: str):
+    """Train model for specific user"""
+    print(f"\n{'='*60}")
+    print(f"🎯 TRAINING MODEL FOR USER: {username}")
+    print(f"{'='*60}")
+
+    # Setup user-specific config
+    setup_user_config(username)
+
+    # Check if user data exists
+    user_folder = f"user_{username}"
+    full_dataset = os.path.join(BASE_DIR, user_folder, "gesture_data_custom_full.csv")
+    master_dataset = os.path.join(BASE_DIR, user_folder, f"gesture_data_custom_{username}.csv")
+
+    if os.path.exists(full_dataset):
+        dataset_path = full_dataset
+    elif os.path.exists(master_dataset):
+        dataset_path = master_dataset
+    else:
+        print(f"⚠️  No data found for user '{username}'")
+        return False
+
+    try:
+        # Use the training logic directly with user-specific paths
+        train_with_dataset(dataset_path)
+        print(f"✅ Successfully trained model for user '{username}'")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to train model for user '{username}': {e}")
+        return False
+
+
+def train_with_dataset(dataset_path: str):
+    """Train models using the specified dataset path"""
+    print("=== TRAIN MOTION SVM WITH FINGER CONTEXT ===")
+    print(f"[INFO] Using dataset: {dataset_path}")
+
+    # Extract username from dataset path if it's a user dataset
+    username = None
+    path_parts = dataset_path.replace("\\", "/").split("/")
+    for part in path_parts:
+        if part.startswith("user_"):
+            username = part.replace("user_", "")
+            break
+    
+    if username:
+        print(f"[INFO] Detected user: {username}")
+        setup_user_config(username)
+    else:
+        # Fallback to default config if not a user dataset
+        print("[INFO] Using default configuration")
+        # Create default dirs
+        RESULTS_DIR.mkdir(exist_ok=True)
+        MODELS_DIR.mkdir(exist_ok=True)
+
+    # Load and process dataset
+    df = None
+    try:
+        df = load_dataset(dataset_path)
+        print(f"[INFO] Successfully loaded: {dataset_path}")
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Dataset not found: {dataset_path}")
+
+    X, labels, scaler, groups = prepare_features(df)
+    train_idx, test_idx = stratified_group_split(labels, groups, test_fraction=TEST_FRACTION, random_state=42)
+
+    # Train Static/Dynamic classifier first and get detected gesture types
+    static_model, static_scaler = train_static_dynamic_classifier(X, labels, groups, train_idx, test_idx, scaler, df)
+    
+    # Auto-detect static gestures for adaptive strategy
+    static_gestures, dynamic_gestures = auto_detect_gesture_types(df)
+    
+    # Then train main multiclass model
+    label_encoder, y_test_enc, y_pred_enc, best_model = train_multiclass(X, labels, groups, train_idx, test_idx, scaler)
+    pose_accuracies = evaluate_pose_binary(X, labels, groups, train_idx, test_idx, label_encoder, static_gestures)
+    report_full_dataset(best_model, label_encoder, X, labels)
+    
+    # Create compact dataset for practice
+    compact_path = RESULTS_DIR / "gesture_data_compact.csv"
+    create_compact_dataset(df, str(compact_path), static_gestures, dynamic_gestures, pose_accuracies)
+    
+    print(f"\n=== TRAINING COMPLETE ===")
+    print(f"Static/Dynamic classifier: {STATIC_DYNAMIC_PKL}")
+    print(f"Main gesture classifier: {MODEL_PKL}")
+    print(f"Feature scaler: {SCALER_PKL}")
+    print(f"Compact dataset: {compact_path}")
+
+
+def train_all_users():
+    """Train models for all available users"""
+    print("🔍 SCANNING FOR USER FOLDERS...")
+    users = get_available_users()
+
+    if not users:
+        print("❌ No user folders found! (folders should start with 'user_')")
+        return
+
+    print(f"📋 Found {len(users)} users: {', '.join(users)}")
+    print()
+
+    success_count = 0
+    for username in users:
+        if train_user_model(username):
+            success_count += 1
+
+    print(f"{'='*60}")
+    print(f"📊 TRAINING SUMMARY: {success_count}/{len(users)} users trained successfully")
+    print(f"{'='*60}")
+
+
 # === Main ===
-def main(dataset_path: str = DEFAULT_DATASET):
+def main(dataset_path: str = None):
+    """Main function - now supports user selection"""
+    print("=== TRAIN USER MOTION SVM MODELS ===")
+
+    if dataset_path:
+        # Direct path specified - train with that dataset
+        print(f"[INFO] Using direct dataset path: {dataset_path}")
+        train_with_dataset(dataset_path)
+    else:
+        # No path specified - show user selection menu
+        select_and_train_user()
+
+
+def main_legacy(dataset_path: str):
+    """Legacy main function for backward compatibility"""
+    print("=== TRAIN MOTION SVM WITH FINGER CONTEXT ===")
+    print(f"[INFO] Using dataset: {dataset_path}")
+
+    # Extract username from dataset path if it's a user dataset
+    username = None
+    if dataset_path.startswith("user_") and "/" in dataset_path:
+        username = dataset_path.split("/")[0].replace("user_", "")
+        print(f"[INFO] Detected user: {username}")
+        setup_user_config(username)
+    else:
+        # Fallback to default config if not a user dataset
+        print("[INFO] Using default configuration")
+        setup_user_config("default")
+
+    # Auto-detect dataset - try user data first, fallback to general
+    datasets_to_try = [
+        dataset_path,                   # User specified
+    ]
     print("=== TRAIN MOTION SVM WITH FINGER CONTEXT ===")
     print(f"[INFO] Using dataset: {dataset_path}")
 
     # Auto-detect dataset - try new data first, fallback to old
     datasets_to_try = [
-        "gesture_data_09_10_2025.csv",  # New real data
+        "gesture_data_custom_full.csv",  # New custom augmented data
+        "gesture_data_09_10_2025.csv",   # New real data
         dataset_path,                   # Fallback to default
     ]
     
@@ -742,12 +1066,12 @@ def main(dataset_path: str = DEFAULT_DATASET):
     
     # Then train main multiclass model
     label_encoder, y_test_enc, y_pred_enc, best_model = train_multiclass(X, labels, groups, train_idx, test_idx, scaler)
-    evaluate_pose_binary(X, labels, groups, train_idx, test_idx, label_encoder, static_gestures)
+    pose_accuracies = evaluate_pose_binary(X, labels, groups, train_idx, test_idx, label_encoder, static_gestures)
     report_full_dataset(best_model, label_encoder, X, labels)
     
     # Create compact dataset for practice
     compact_path = RESULTS_DIR / "gesture_data_compact.csv"
-    create_compact_dataset(df, str(compact_path))
+    create_compact_dataset(df, str(compact_path), static_gestures, dynamic_gestures, pose_accuracies)
     
     print(f"\n=== TRAINING COMPLETE ===")
     print(f"Static/Dynamic classifier: {STATIC_DYNAMIC_PKL}")
@@ -756,12 +1080,58 @@ def main(dataset_path: str = DEFAULT_DATASET):
     print(f"Compact dataset: {compact_path}")
 
 
+def auto_detect_gesture_types(df: pd.DataFrame):
+    """Auto-detect static and dynamic gestures based on motion patterns."""
+    df = df.copy()
+
+    # Calculate delta magnitude for each gesture
+    df["delta_mag"] = np.sqrt(df["delta_x"] ** 2 + df["delta_y"] ** 2)
+
+    # Group by pose_label and calculate average motion
+    gesture_motion = df.groupby("pose_label")["delta_mag"].agg(["mean", "std", "count"]).reset_index()
+
+    # Classify gestures based on motion threshold
+    static_gestures = []
+    dynamic_gestures = []
+
+    for _, row in gesture_motion.iterrows():
+        pose = row["pose_label"]
+        mean_motion = row["mean"]
+
+        # Apply manual overrides first
+        if MANUAL_STATIC_OVERRIDE and pose in MANUAL_STATIC_OVERRIDE:
+            static_gestures.append(pose)
+        elif MANUAL_DYNAMIC_OVERRIDE and pose in MANUAL_DYNAMIC_OVERRIDE:
+            dynamic_gestures.append(pose)
+        # Auto-detect based on threshold
+        elif mean_motion < STATIC_THRESHOLD:
+            static_gestures.append(pose)
+        else:
+            dynamic_gestures.append(pose)
+
+    print(f"[INFO] Auto-detected gestures:")
+    print(f"  Static ({len(static_gestures)}): {static_gestures}")
+    print(f"  Dynamic ({len(dynamic_gestures)}): {dynamic_gestures}")
+
+    return static_gestures, dynamic_gestures
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Train motion SVM models with finger context.")
-    parser.add_argument("--dataset", default=DEFAULT_DATASET, help="Path to the merged dataset CSV.")
+    parser.add_argument("--dataset", help="Path to the merged dataset CSV. If not specified, runs interactive mode.")
+    parser.add_argument("--user", help="Username to train for. If not specified, shows user selection menu.")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    main(dataset_path=args.dataset)
+    
+    if args.user:
+        # Direct user specified
+        train_user_model(args.user)
+    elif args.dataset:
+        # Direct dataset specified
+        main(args.dataset)
+    else:
+        # Interactive mode
+        main()
