@@ -19,7 +19,7 @@ INSTRUCTION_WINDOW = "Pose Instructions"
 
 # Constants from test_gesture_recognition.py
 DELTA_WEIGHT = 10.0  # Same as training
-CONFIDENCE_THRESHOLD = 0.65  # 70% confidence minimum
+CONFIDENCE_THRESHOLD = 0.55  # 70% confidence minimum
 MODELS_DIR = 'models'
 MODEL_PKL = os.path.join(MODELS_DIR, 'motion_svm_model.pkl')
 SCALER_PKL = os.path.join(MODELS_DIR, 'motion_scaler.pkl')

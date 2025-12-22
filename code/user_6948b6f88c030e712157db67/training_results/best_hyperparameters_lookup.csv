@@ -1,0 +1,15 @@
+pose_label,best_kernel,best_C,best_gamma,cv_f1_score
+end,rbf,100.0,0.1,0.9692716640085062
+end_present,rbf,1.0,1,0.9734515339732731
+home,rbf,10.0,1,0.9745645797369937
+next_slide,rbf,0.1,0.1,0.9393747723918502
+previous_slide,rbf,0.1,auto,0.9670859674085481
+rotate_down,rbf,1.0,auto,0.9428914968563296
+rotate_left,rbf,1.0,0.1,0.931443690749151
+rotate_right,rbf,10.0,0.01,0.9537929750268344
+rotate_up,rbf,0.1,1,0.9409222809081006
+start_present,rbf,0.01,1,0.964209109730849
+zoom_in,rbf,10.0,1,0.965095945677341
+zoom_in_slide,rbf,0.01,1,0.9730848861283643
+zoom_out,rbf,0.01,1,0.9734808769468589
+zoom_out_slide,rbf,100.0,1,0.9566969262621436
